@@ -482,7 +482,7 @@
         <header>
             <div class="logo">XIBAO <span>/ ASR TEST</span></div>
             <label class="tts-toggle">
-                <input type="checkbox" id="ttsToggle" />
+                <input type="checkbox" id="ttsToggle" checked />
                 语音播报
             </label>
             <div class="badge">DashScope · PCM · 16kHz</div>
@@ -533,17 +533,21 @@
                 </div>
             </div>
 
-            <div class="response-wrap" id="responseWrap" style="display:none">
+            <div class="response-wrap" id="responseWrap" style="display: none">
                 <div class="transcript-label">犀宝的回应</div>
                 <div class="transcript-card response-card" id="responseCard">
                     <span id="responseText"></span
-                    ><span class="response-cursor" id="responseCursor" style="display:none"></span>
+                    ><span
+                        class="response-cursor"
+                        id="responseCursor"
+                        style="display: none"
+                    ></span>
                 </div>
             </div>
         </main>
 
         <footer>
-            <span>ws://localhost:8001/ws</span>
+            <span id="ws-url-display">ws://&lt;host&gt;/ws</span>
             <span>qwen3-asr-flash-realtime</span>
         </footer>
 
@@ -587,13 +591,19 @@
                         video: false,
                     });
 
+                    closeAudioCtx();  // 清理可能残留的上一次 TTS audioCtx
                     audioCtx = new AudioContext();
                     await audioCtx.audioWorklet.addModule(
                         "/static/worklets/audio-processor.worklet.js",
                     );
 
                     setStatus("连接服务器…", "connecting");
-                    ws = new WebSocket("ws://localhost:8001/ws");
+                    const wsProtocol =
+                        window.location.protocol === "https:" ? "wss:" : "ws:";
+                    const wsUrl = `${wsProtocol}//${window.location.host}/ws`;
+                    document.getElementById("ws-url-display").textContent =
+                        wsUrl;
+                    ws = new WebSocket(wsUrl);
                     ws.binaryType = "arraybuffer";
 
                     ws.onopen = () => {
@@ -680,10 +690,7 @@
                     sourceNode.disconnect();
                     sourceNode = null;
                 }
-                if (audioCtx) {
-                    audioCtx.close();
-                    audioCtx = null;
-                }
+                // audioCtx 保留给 TTS 播放用，TTS 结束后由 closeAudioCtx() 关闭
                 if (stream) {
                     stream.getTracks().forEach((t) => t.stop());
                     stream = null;
@@ -691,6 +698,13 @@
                 if (ws) {
                     ws.close();
                     ws = null;
+                }
+            }
+
+            function closeAudioCtx() {
+                if (audioCtx) {
+                    audioCtx.close();
+                    audioCtx = null;
                 }
             }
 
@@ -711,9 +725,11 @@
             async function streamLLMResponse(text) {
                 responseWrap.style.display = "";
                 responseText.textContent = "";
-                responseText.innerHTML = '<span class="response-thinking">犀宝思考中…</span>';
+                responseText.innerHTML =
+                    '<span class="response-thinking">犀宝思考中…</span>';
                 responseCursor.style.display = "none";
                 llmBuffer = "";
+                let ttsStarted = false;
 
                 try {
                     const res = await fetch("/api/chat/stream", {
@@ -745,7 +761,10 @@
                             const payload = line.slice(6);
                             if (payload === "[DONE]") {
                                 responseCursor.style.display = "none";
-                                if (ttsEnabled && llmBuffer) playTTS(llmBuffer);
+                                if (ttsEnabled && llmBuffer) {
+                                    ttsStarted = true;
+                                    playTTS(llmBuffer);  // playTTS 负责关闭 audioCtx
+                                }
                                 return;
                             }
                             responseText.textContent += payload;
@@ -757,6 +776,7 @@
                     responseText.textContent = "（犀宝睡着了，锤子都叫不醒…）";
                 } finally {
                     responseCursor.style.display = "none";
+                    if (!ttsStarted) closeAudioCtx();  // TTS 未启动则立即关闭
                 }
             }
 
@@ -767,21 +787,21 @@
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ text }),
                     });
-                    if (!res.ok) return;
-                    const reader = res.body.getReader();
-                    const chunks = [];
-                    while (true) {
-                        const { done, value } = await reader.read();
-                        if (done) break;
-                        chunks.push(value);
-                    }
-                    const blob = new Blob(chunks, { type: "audio/mpeg" });
-                    const url = URL.createObjectURL(blob);
-                    const audio = new Audio(url);
-                    audio.onended = () => URL.revokeObjectURL(url);
-                    audio.play();
+                    if (!res.ok) { closeAudioCtx(); return; }
+                    const arrayBuffer = await res.arrayBuffer();
+                    // 复用已由用户手势激活的 audioCtx，避免 HTTPS 下 autoplay 被阻止
+                    const ctx = audioCtx;
+                    if (!ctx) return;
+                    if (ctx.state === "suspended") await ctx.resume();
+                    const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+                    const source = ctx.createBufferSource();
+                    source.buffer = audioBuffer;
+                    source.connect(ctx.destination);
+                    source.onended = closeAudioCtx;
+                    source.start();
                 } catch (err) {
                     console.error("TTS error:", err);
+                    closeAudioCtx();
                 }
             }
         </script>

@@ -66,7 +66,12 @@ class DashScopeSpeechClient:
         }
         logger.info(f"Connecting to DashScope Realtime: {self.ws_url}")
         try:
-            self._ws = await websockets.connect(self.ws_url, additional_headers=headers)
+            self._ws = await websockets.connect(
+                self.ws_url,
+                additional_headers=headers,
+                ping_interval=None,  # DashScope 管理自己的 keepalive，禁用 websockets 自动 ping 避免超时断连
+                open_timeout=15,
+            )
         except Exception as e:
             logger.error(f"DashScope WebSocket connect failed: {e}")
             raise SpeechRecognitionError(f"DashScope 连接失败: {e}") from e
