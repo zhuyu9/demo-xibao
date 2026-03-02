@@ -795,6 +795,27 @@
                     if (!ctx) return;
                     if (ctx.state === "suspended") await ctx.resume();
                     const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+
+                    // 归一化音频振幅，避免 TTS 输出音量忽高忽低
+                    const targetPeak = 0.9;
+                    let maxAmp = 0;
+                    for (let c = 0; c < audioBuffer.numberOfChannels; c++) {
+                        const data = audioBuffer.getChannelData(c);
+                        for (let i = 0; i < data.length; i++) {
+                            const abs = Math.abs(data[i]);
+                            if (abs > maxAmp) maxAmp = abs;
+                        }
+                    }
+                    if (maxAmp > 0.01 && maxAmp < targetPeak) {
+                        const scale = targetPeak / maxAmp;
+                        for (let c = 0; c < audioBuffer.numberOfChannels; c++) {
+                            const data = audioBuffer.getChannelData(c);
+                            for (let i = 0; i < data.length; i++) {
+                                data[i] *= scale;
+                            }
+                        }
+                    }
+
                     const source = ctx.createBufferSource();
                     source.buffer = audioBuffer;
                     source.connect(ctx.destination);
