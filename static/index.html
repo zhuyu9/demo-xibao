@@ -574,6 +574,7 @@
             let llmBuffer = "";
 
             const ttsToggle = document.getElementById("ttsToggle");
+            ttsEnabled = ttsToggle.checked;
             ttsToggle.addEventListener("change", () => {
                 ttsEnabled = ttsToggle.checked;
             });
