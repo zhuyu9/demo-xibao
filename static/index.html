@@ -552,6 +552,16 @@
         </footer>
 
         <script>
+            // 自动计算 basePath：如果部署在子路径下（如 /xibao），自动添加前缀
+            const basePath = (() => {
+                const pathname = window.location.pathname;
+                // 如果路径超过一层，且不是以 /static 或 /ws 开头，去掉最后一段
+                if (pathname === '/' || pathname === '') return '';
+                const segments = pathname.split('/').filter(s => s);
+                // 如果当前在 /xibao/ 或 /xibao/some-page，返回 /xibao
+                return segments.length > 0 ? '/' + segments[0] : '';
+            })();
+
             const btnWrap = document.getElementById("btnWrap");
             const btn = document.getElementById("btnRecord");
             const statusEl = document.getElementById("status");
@@ -595,13 +605,13 @@
                     closeAudioCtx();  // 清理可能残留的上一次 TTS audioCtx
                     audioCtx = new AudioContext();
                     await audioCtx.audioWorklet.addModule(
-                        "/xibao/static/worklets/audio-processor.worklet.js",
+                        basePath + "/static/worklets/audio-processor.worklet.js",
                     );
 
                     setStatus("连接服务器…", "connecting");
                     const wsProtocol =
                         window.location.protocol === "https:" ? "wss:" : "ws:";
-                    const wsUrl = `${wsProtocol}//${window.location.host}/xibao/ws`;
+                    const wsUrl = `${wsProtocol}//${window.location.host}${basePath}/ws`;
                     document.getElementById("ws-url-display").textContent =
                         wsUrl;
                     ws = new WebSocket(wsUrl);
@@ -733,7 +743,7 @@
                 let ttsStarted = false;
 
                 try {
-                    const res = await fetch("/xibao/api/chat/stream", {
+                    const res = await fetch(basePath + "/api/chat/stream", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ text }),
@@ -783,7 +793,7 @@
 
             async function playTTS(text) {
                 try {
-                    const res = await fetch("/xibao/api/tts/stream", {
+                    const res = await fetch(basePath + "/api/tts/stream", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ text }),
