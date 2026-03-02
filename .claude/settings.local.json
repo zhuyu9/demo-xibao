@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Bash(cat:*)",
+      "Bash(uv sync:*)",
+      "Bash(uv pip:*)",
+      "Bash(uv run:*)",
+      "WebFetch(domain:bailian.console.aliyun.com)",
+      "Bash(git rm:*)"
+    ]
+  }
+}

@@ -1,6 +1,20 @@
-def main():
-    print("Hello from demo-xibao!")
+from fastapi import FastAPI, WebSocket
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+
+from app.api.endpoints.speech import router as speech_router
+from app.api.endpoints.speech import speech_recognition_websocket
+
+app = FastAPI(title="demo-xibao")
+app.include_router(speech_router)
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# /ws 是 /api/speech/ws 的短路径别名
+@app.websocket("/ws")
+async def ws_shortcut(websocket: WebSocket) -> None:
+    await speech_recognition_websocket(websocket)
 
 
-if __name__ == "__main__":
-    main()
+@app.get("/")
+async def index():
+    return FileResponse("static/index.html")

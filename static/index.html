@@ -1,0 +1,602 @@
+<!doctype html>
+<html lang="zh">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>ASR 语音识别测试</title>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link
+            href="https://fonts.googleapis.com/css2?family=Syncopate:wght@400;700&family=Courier+Prime:ital,wght@0,400;0,700;1,400&display=swap"
+            rel="stylesheet"
+        />
+        <style>
+            :root {
+                --bg: #08090b;
+                --bg-card: #0c0e13;
+                --border: #18212e;
+                --accent: #00ff9d;
+                --accent-dim: rgba(0, 255, 157, 0.1);
+                --red: #ff3358;
+                --red-dim: rgba(255, 51, 88, 0.12);
+                --text: #ddeaf8;
+                --muted: #2a3a4e;
+                --interim: #4a6580;
+            }
+
+            *,
+            *::before,
+            *::after {
+                box-sizing: border-box;
+                margin: 0;
+                padding: 0;
+            }
+
+            body {
+                background: var(--bg);
+                color: var(--text);
+                font-family: "Syncopate", sans-serif;
+                min-height: 100vh;
+                display: grid;
+                grid-template-rows: auto 1fr auto;
+                overflow-x: hidden;
+            }
+
+            /* Subtle grid */
+            body::before {
+                content: "";
+                position: fixed;
+                inset: 0;
+                background-image:
+                    linear-gradient(var(--border) 1px, transparent 1px),
+                    linear-gradient(90deg, var(--border) 1px, transparent 1px);
+                background-size: 40px 40px;
+                pointer-events: none;
+                opacity: 0.55;
+                z-index: 0;
+            }
+
+            /* Radial vignette */
+            body::after {
+                content: "";
+                position: fixed;
+                inset: 0;
+                background: radial-gradient(
+                    ellipse at 50% 40%,
+                    transparent 20%,
+                    var(--bg) 75%
+                );
+                pointer-events: none;
+                z-index: 0;
+            }
+
+            /* ── Header ── */
+            header {
+                position: relative;
+                z-index: 1;
+                padding: 22px 32px;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                border-bottom: 1px solid var(--border);
+            }
+
+            .logo {
+                font-size: 12px;
+                font-weight: 700;
+                letter-spacing: 0.35em;
+                color: var(--accent);
+            }
+            .logo span {
+                color: var(--muted);
+                font-weight: 400;
+            }
+
+            .badge {
+                font-size: 9px;
+                letter-spacing: 0.2em;
+                color: var(--muted);
+                border: 1px solid var(--border);
+                padding: 4px 12px;
+                text-transform: uppercase;
+            }
+
+            /* ── Main ── */
+            main {
+                position: relative;
+                z-index: 1;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                gap: 52px;
+                padding: 64px 24px;
+            }
+
+            /* ── Button area ── */
+            .record-area {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 28px;
+            }
+
+            .btn-wrap {
+                position: relative;
+                width: 156px;
+                height: 156px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+
+            /* Ripple rings — only visible during recording */
+            .ring {
+                position: absolute;
+                inset: 0;
+                border-radius: 50%;
+                border: 1px solid var(--red);
+                opacity: 0;
+                pointer-events: none;
+            }
+            .btn-wrap.recording .ring:nth-child(1) {
+                animation: ripple 2.4s ease-out infinite 0s;
+            }
+            .btn-wrap.recording .ring:nth-child(2) {
+                animation: ripple 2.4s ease-out infinite 0.8s;
+            }
+            .btn-wrap.recording .ring:nth-child(3) {
+                animation: ripple 2.4s ease-out infinite 1.6s;
+            }
+
+            @keyframes ripple {
+                0% {
+                    transform: scale(1);
+                    opacity: 0.7;
+                }
+                100% {
+                    transform: scale(2.5);
+                    opacity: 0;
+                }
+            }
+
+            .btn-record {
+                width: 100%;
+                height: 100%;
+                border-radius: 50%;
+                border: 1.5px solid var(--accent);
+                background: var(--accent-dim);
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                position: relative;
+                z-index: 1;
+                transition:
+                    border-color 0.3s,
+                    background 0.3s,
+                    box-shadow 0.3s;
+                outline: none;
+                -webkit-tap-highlight-color: transparent;
+            }
+
+            .btn-record:hover {
+                box-shadow:
+                    0 0 48px rgba(0, 255, 157, 0.15),
+                    0 0 100px rgba(0, 255, 157, 0.05);
+            }
+
+            .btn-record.recording {
+                border-color: var(--red);
+                background: var(--red-dim);
+                box-shadow: 0 0 48px rgba(255, 51, 88, 0.2);
+            }
+
+            .btn-record svg {
+                color: var(--accent);
+                transition: color 0.3s;
+            }
+            .btn-record.recording svg {
+                color: var(--red);
+            }
+
+            /* ── Waveform ── */
+            .waveform {
+                display: flex;
+                align-items: center;
+                gap: 4px;
+                height: 32px;
+                opacity: 0;
+                transition: opacity 0.4s;
+            }
+            .waveform.active {
+                opacity: 1;
+            }
+
+            .waveform b {
+                display: block;
+                width: 3px;
+                border-radius: 2px;
+                background: var(--red);
+                animation: wave 1.15s ease-in-out infinite;
+            }
+            .waveform b:nth-child(1) {
+                height: 8px;
+                animation-delay: 0s;
+            }
+            .waveform b:nth-child(2) {
+                height: 18px;
+                animation-delay: 0.1s;
+            }
+            .waveform b:nth-child(3) {
+                height: 28px;
+                animation-delay: 0.2s;
+            }
+            .waveform b:nth-child(4) {
+                height: 20px;
+                animation-delay: 0.3s;
+            }
+            .waveform b:nth-child(5) {
+                height: 32px;
+                animation-delay: 0.4s;
+            }
+            .waveform b:nth-child(6) {
+                height: 20px;
+                animation-delay: 0.3s;
+            }
+            .waveform b:nth-child(7) {
+                height: 28px;
+                animation-delay: 0.2s;
+            }
+            .waveform b:nth-child(8) {
+                height: 18px;
+                animation-delay: 0.1s;
+            }
+            .waveform b:nth-child(9) {
+                height: 8px;
+                animation-delay: 0s;
+            }
+
+            @keyframes wave {
+                0%,
+                100% {
+                    transform: scaleY(0.3);
+                    opacity: 0.45;
+                }
+                50% {
+                    transform: scaleY(1);
+                    opacity: 1;
+                }
+            }
+
+            /* ── Status ── */
+            .status {
+                font-size: 9px;
+                letter-spacing: 0.28em;
+                text-transform: uppercase;
+                color: var(--muted);
+                transition: color 0.3s;
+                min-height: 1.5em;
+                text-align: center;
+            }
+            .status.connecting {
+                color: var(--accent);
+            }
+            .status.recording {
+                color: var(--red);
+            }
+            .status.stopped {
+                color: var(--muted);
+            }
+            .status.error {
+                color: #ff9900;
+            }
+
+            /* ── Transcript ── */
+            .transcript-wrap {
+                width: 100%;
+                max-width: 740px;
+            }
+
+            .transcript-label {
+                font-size: 9px;
+                letter-spacing: 0.3em;
+                color: var(--muted);
+                text-transform: uppercase;
+                margin-bottom: 10px;
+            }
+
+            .transcript-card {
+                background: var(--bg-card);
+                border: 1px solid var(--border);
+                padding: 28px 32px;
+                font-family: "Courier Prime", monospace;
+                font-size: 17px;
+                line-height: 1.85;
+                min-height: 160px;
+                max-height: 340px;
+                overflow-y: auto;
+                position: relative;
+                scrollbar-width: thin;
+                scrollbar-color: var(--border) transparent;
+            }
+
+            /* HUD corner marks */
+            .transcript-card::before,
+            .transcript-card::after {
+                content: "";
+                position: absolute;
+                width: 14px;
+                height: 14px;
+                border-color: var(--accent);
+                border-style: solid;
+                opacity: 0.6;
+            }
+            .transcript-card::before {
+                top: -1px;
+                left: -1px;
+                border-width: 2px 0 0 2px;
+            }
+            .transcript-card::after {
+                bottom: -1px;
+                right: -1px;
+                border-width: 0 2px 2px 0;
+            }
+
+            #history {
+                color: var(--text);
+                white-space: pre-wrap;
+                word-break: break-word;
+            }
+            #interim {
+                color: var(--interim);
+                font-style: italic;
+            }
+
+            .cursor {
+                display: inline-block;
+                width: 9px;
+                height: 18px;
+                background: var(--accent);
+                vertical-align: text-bottom;
+                margin-left: 3px;
+                animation: blink 1s step-end infinite;
+            }
+            @keyframes blink {
+                0%,
+                100% {
+                    opacity: 1;
+                }
+                50% {
+                    opacity: 0;
+                }
+            }
+
+            .placeholder {
+                color: var(--muted);
+                font-style: italic;
+            }
+
+            /* ── Footer ── */
+            footer {
+                position: relative;
+                z-index: 1;
+                padding: 14px 32px;
+                border-top: 1px solid var(--border);
+                font-size: 9px;
+                letter-spacing: 0.18em;
+                color: var(--muted);
+                display: flex;
+                justify-content: space-between;
+                flex-wrap: wrap;
+                gap: 8px;
+            }
+        </style>
+    </head>
+    <body>
+        <header>
+            <div class="logo">XIBAO <span>/ ASR TEST</span></div>
+            <div class="badge">DashScope · PCM · 16kHz</div>
+        </header>
+
+        <main>
+            <div class="record-area">
+                <div class="btn-wrap" id="btnWrap">
+                    <div class="ring"></div>
+                    <div class="ring"></div>
+                    <div class="ring"></div>
+                    <button
+                        class="btn-record"
+                        id="btnRecord"
+                        aria-label="开始录音"
+                    >
+                        <svg
+                            width="44"
+                            height="44"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.5"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                        >
+                            <rect x="9" y="2" width="6" height="11" rx="3" />
+                            <path d="M5 10a7 7 0 0 0 14 0" />
+                            <line x1="12" y1="17" x2="12" y2="21" />
+                            <line x1="8" y1="21" x2="16" y2="21" />
+                        </svg>
+                    </button>
+                </div>
+
+                <div class="waveform" id="waveform">
+                    <b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b
+                    ><b></b>
+                </div>
+
+                <div class="status" id="status">点击麦克风开始录音</div>
+            </div>
+
+            <div class="transcript-wrap">
+                <div class="transcript-label">识别结果</div>
+                <div class="transcript-card" id="card">
+                    <span id="history"></span><span id="interim"></span
+                    ><span class="cursor" id="cur"></span>
+                </div>
+            </div>
+        </main>
+
+        <footer>
+            <span>ws://localhost:8001/ws</span>
+            <span>qwen3-asr-flash-realtime</span>
+        </footer>
+
+        <script>
+            const btnWrap = document.getElementById("btnWrap");
+            const btn = document.getElementById("btnRecord");
+            const statusEl = document.getElementById("status");
+            const historyEl = document.getElementById("history");
+            const interimEl = document.getElementById("interim");
+            const waveform = document.getElementById("waveform");
+            const card = document.getElementById("card");
+
+            let isRecording = false;
+            let ws = null;
+            let audioCtx = null;
+            let workletNode = null;
+            let sourceNode = null;
+            let stream = null;
+
+            btn.addEventListener("click", () => {
+                if (!isRecording) startRecording();
+                else stopRecording();
+            });
+
+            async function startRecording() {
+                try {
+                    setStatus("请求麦克风权限…", "connecting");
+                    stream = await navigator.mediaDevices.getUserMedia({
+                        audio: true,
+                        video: false,
+                    });
+
+                    audioCtx = new AudioContext();
+                    await audioCtx.audioWorklet.addModule(
+                        "/static/worklets/audio-processor.worklet.js",
+                    );
+
+                    setStatus("连接服务器…", "connecting");
+                    ws = new WebSocket("ws://localhost:8001/ws");
+                    ws.binaryType = "arraybuffer";
+
+                    ws.onopen = () => {
+                        workletNode = new AudioWorkletNode(
+                            audioCtx,
+                            "pcm-processor",
+                        );
+                        workletNode.port.onmessage = (e) => {
+                            if (ws && ws.readyState === WebSocket.OPEN)
+                                ws.send(e.data);
+                        };
+                        sourceNode = audioCtx.createMediaStreamSource(stream);
+                        sourceNode.connect(workletNode);
+                        workletNode.connect(audioCtx.destination);
+
+                        isRecording = true;
+                        btn.classList.add("recording");
+                        btnWrap.classList.add("recording");
+                        waveform.classList.add("active");
+                        clearTranscript();
+                        setStatus("录音中…", "recording");
+                    };
+
+                    ws.onmessage = (e) => handleResult(JSON.parse(e.data));
+
+                    ws.onerror = () => {
+                        setStatus("连接错误", "error");
+                        cleanup();
+                    };
+
+                    ws.onclose = () => {
+                        if (isRecording) {
+                            cleanup();
+                            setStatus("连接已断开", "stopped");
+                        }
+                    };
+                } catch (err) {
+                    setStatus("错误: " + err.message, "error");
+                    cleanup();
+                }
+            }
+
+            function stopRecording() {
+                if (ws && ws.readyState === WebSocket.OPEN) ws.send("finish");
+                setStatus("处理最终结果…", "stopped");
+                btn.classList.remove("recording");
+                btnWrap.classList.remove("recording");
+                waveform.classList.remove("active");
+                isRecording = false;
+                setTimeout(cleanup, 3500);
+            }
+
+            function handleResult(data) {
+                if (data.type === "result") {
+                    if (data.is_final) {
+                        if (data.text) historyEl.textContent += data.text;
+                        interimEl.textContent = "";
+                    } else {
+                        interimEl.textContent = data.text || "";
+                    }
+                    scrollBottom();
+                } else if (data.type === "finished") {
+                    interimEl.textContent = "";
+                    cleanup();
+                    setStatus("录音已完成", "stopped");
+                } else if (data.type === "error") {
+                    setStatus("错误: " + data.message, "error");
+                    cleanup();
+                }
+            }
+
+            function cleanup() {
+                isRecording = false;
+                btn.classList.remove("recording");
+                btnWrap.classList.remove("recording");
+                waveform.classList.remove("active");
+                if (workletNode) {
+                    workletNode.disconnect();
+                    workletNode = null;
+                }
+                if (sourceNode) {
+                    sourceNode.disconnect();
+                    sourceNode = null;
+                }
+                if (audioCtx) {
+                    audioCtx.close();
+                    audioCtx = null;
+                }
+                if (stream) {
+                    stream.getTracks().forEach((t) => t.stop());
+                    stream = null;
+                }
+                if (ws) {
+                    ws.close();
+                    ws = null;
+                }
+            }
+
+            function clearTranscript() {
+                historyEl.textContent = "";
+                interimEl.textContent = "";
+            }
+
+            function setStatus(text, cls) {
+                statusEl.textContent = text;
+                statusEl.className = "status " + (cls || "");
+            }
+
+            function scrollBottom() {
+                card.scrollTop = card.scrollHeight;
+            }
+        </script>
+    </body>
+</html>
