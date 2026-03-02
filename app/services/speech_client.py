@@ -186,8 +186,12 @@ class DashScopeSpeechClient:
                     logger.debug(f"Unhandled event: {event_type} | {data}")
 
         except Exception as e:
-            logger.error(f"Receive results error: {e}")
-            on_result({"type": "error", "message": str(e)})
+            if self._finishing:
+                # 结束阶段 DashScope 主动关闭连接（超时/正常断开），属于预期行为
+                logger.debug(f"DashScope connection closed during finishing (expected): {e}")
+            else:
+                logger.error(f"Receive results error: {e}")
+                on_result({"type": "error", "message": str(e)})
 
     async def send_audio(self, audio_data: bytes) -> None:
         """发送音频数据（base64 编码后追加到输入缓冲区）。"""
@@ -221,6 +225,9 @@ class DashScopeSpeechClient:
             self._receive_task = None
 
         if self._ws:
-            await self._ws.close()
+            try:
+                await asyncio.wait_for(self._ws.close(), timeout=5)
+            except Exception:
+                pass
             self._ws = None
             logger.info("DashScope Realtime WebSocket closed")

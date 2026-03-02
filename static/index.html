@@ -416,6 +416,52 @@
                 opacity: 0.7;
             }
 
+            /* ── TTS Toggle ── */
+            .tts-toggle {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                font-size: 9px;
+                letter-spacing: 0.2em;
+                text-transform: uppercase;
+                color: var(--muted);
+                cursor: pointer;
+                user-select: none;
+            }
+
+            .tts-toggle input[type="checkbox"] {
+                appearance: none;
+                -webkit-appearance: none;
+                width: 36px;
+                height: 18px;
+                background: var(--border);
+                border-radius: 9px;
+                cursor: pointer;
+                position: relative;
+                transition: background 0.3s;
+                flex-shrink: 0;
+            }
+
+            .tts-toggle input[type="checkbox"]:checked {
+                background: var(--accent);
+            }
+
+            .tts-toggle input[type="checkbox"]::after {
+                content: "";
+                position: absolute;
+                width: 12px;
+                height: 12px;
+                background: var(--bg);
+                border-radius: 50%;
+                top: 3px;
+                left: 3px;
+                transition: transform 0.3s;
+            }
+
+            .tts-toggle input[type="checkbox"]:checked::after {
+                transform: translateX(18px);
+            }
+
             /* ── Footer ── */
             footer {
                 position: relative;
@@ -435,6 +481,10 @@
     <body>
         <header>
             <div class="logo">XIBAO <span>/ ASR TEST</span></div>
+            <label class="tts-toggle">
+                <input type="checkbox" id="ttsToggle" />
+                语音播报
+            </label>
             <div class="badge">DashScope · PCM · 16kHz</div>
         </header>
 
@@ -516,6 +566,13 @@
             let workletNode = null;
             let sourceNode = null;
             let stream = null;
+            let ttsEnabled = false;
+            let llmBuffer = "";
+
+            const ttsToggle = document.getElementById("ttsToggle");
+            ttsToggle.addEventListener("change", () => {
+                ttsEnabled = ttsToggle.checked;
+            });
 
             btn.addEventListener("click", () => {
                 if (!isRecording) startRecording();
@@ -656,6 +713,7 @@
                 responseText.textContent = "";
                 responseText.innerHTML = '<span class="response-thinking">犀宝思考中…</span>';
                 responseCursor.style.display = "none";
+                llmBuffer = "";
 
                 try {
                     const res = await fetch("/api/chat/stream", {
@@ -687,9 +745,11 @@
                             const payload = line.slice(6);
                             if (payload === "[DONE]") {
                                 responseCursor.style.display = "none";
+                                if (ttsEnabled && llmBuffer) playTTS(llmBuffer);
                                 return;
                             }
                             responseText.textContent += payload;
+                            llmBuffer += payload;
                             responseCard.scrollTop = responseCard.scrollHeight;
                         }
                     }
@@ -697,6 +757,31 @@
                     responseText.textContent = "（犀宝睡着了，锤子都叫不醒…）";
                 } finally {
                     responseCursor.style.display = "none";
+                }
+            }
+
+            async function playTTS(text) {
+                try {
+                    const res = await fetch("/api/tts/stream", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ text }),
+                    });
+                    if (!res.ok) return;
+                    const reader = res.body.getReader();
+                    const chunks = [];
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        chunks.push(value);
+                    }
+                    const blob = new Blob(chunks, { type: "audio/mpeg" });
+                    const url = URL.createObjectURL(blob);
+                    const audio = new Audio(url);
+                    audio.onended = () => URL.revokeObjectURL(url);
+                    audio.play();
+                } catch (err) {
+                    console.error("TTS error:", err);
                 }
             }
         </script>

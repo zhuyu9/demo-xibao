@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     LLM_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     LLM_MODEL: str = "qwen-plus"
 
+    TTS_WS_URL: str = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
+    TTS_MODEL: str = "qwen3-tts-flash-realtime"
+    TTS_VOICE: str = "Sunny"
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -9,7 +9,9 @@
       "WebFetch(domain:bailian.console.aliyun.com)",
       "Bash(git rm:*)",
       "Bash(uv add:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "WebFetch(domain:help.aliyun.com)",
+      "WebSearch"
     ]
   }
 }
