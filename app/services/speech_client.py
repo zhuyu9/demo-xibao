@@ -160,9 +160,9 @@ class DashScopeSpeechClient:
                 elif event_type == "error":
                     err = data.get("error", {})
                     err_msg = err.get("message", str(err))
-                    # 结束时提交空缓冲区是预期行为，当作正常结束处理
-                    if self._finishing and "empty" in err_msg.lower():
-                        logger.info("Empty buffer on commit (expected), finishing")
+                    # 结束阶段收到任何错误（缓冲区已被 VAD 清空是常见情况）均视为正常完成
+                    if self._finishing:
+                        logger.info(f"Error during finishing (expected, VAD may have cleared buffer): {err_msg}")
                         on_result({"type": "finished", "task_id": self._task_id})
                     else:
                         logger.error(f"Realtime error: {err}")

@@ -10,4 +10,5 @@ dependencies = [
     "pydantic-settings>=2.1.0",
     "loguru>=0.7.0",
     "websockets>=13.0",
+    "openai>=1.0.0",
 ]

@@ -2,11 +2,13 @@ from fastapi import FastAPI, WebSocket
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
+from app.api.endpoints.chat import router as chat_router
 from app.api.endpoints.speech import router as speech_router
 from app.api.endpoints.speech import speech_recognition_websocket
 
 app = FastAPI(title="demo-xibao")
 app.include_router(speech_router)
+app.include_router(chat_router)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # /ws 是 /api/speech/ws 的短路径别名

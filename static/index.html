@@ -377,6 +377,45 @@
                 font-style: italic;
             }
 
+            /* ── Response card ── */
+            .response-wrap {
+                width: 100%;
+                max-width: 740px;
+            }
+
+            .response-card {
+                --accent: #ffb347;
+                --accent-dim: rgba(255, 179, 71, 0.08);
+            }
+
+            .response-card::before,
+            .response-card::after {
+                border-color: var(--accent);
+            }
+
+            #responseText {
+                color: var(--text);
+                white-space: pre-wrap;
+                word-break: break-word;
+            }
+
+            .response-cursor {
+                display: inline-block;
+                width: 9px;
+                height: 18px;
+                background: #ffb347;
+                vertical-align: text-bottom;
+                margin-left: 3px;
+                animation: blink 1s step-end infinite;
+            }
+
+            .response-thinking {
+                color: #ffb347;
+                font-style: italic;
+                font-size: 13px;
+                opacity: 0.7;
+            }
+
             /* ── Footer ── */
             footer {
                 position: relative;
@@ -443,6 +482,14 @@
                     ><span class="cursor" id="cur"></span>
                 </div>
             </div>
+
+            <div class="response-wrap" id="responseWrap" style="display:none">
+                <div class="transcript-label">犀宝的回应</div>
+                <div class="transcript-card response-card" id="responseCard">
+                    <span id="responseText"></span
+                    ><span class="response-cursor" id="responseCursor" style="display:none"></span>
+                </div>
+            </div>
         </main>
 
         <footer>
@@ -458,6 +505,10 @@
             const interimEl = document.getElementById("interim");
             const waveform = document.getElementById("waveform");
             const card = document.getElementById("card");
+            const responseWrap = document.getElementById("responseWrap");
+            const responseCard = document.getElementById("responseCard");
+            const responseText = document.getElementById("responseText");
+            const responseCursor = document.getElementById("responseCursor");
 
             let isRecording = false;
             let ws = null;
@@ -551,6 +602,8 @@
                     interimEl.textContent = "";
                     cleanup();
                     setStatus("录音已完成", "stopped");
+                    const finalText = historyEl.textContent.trim();
+                    if (finalText) streamLLMResponse(finalText);
                 } else if (data.type === "error") {
                     setStatus("错误: " + data.message, "error");
                     cleanup();
@@ -596,6 +649,55 @@
 
             function scrollBottom() {
                 card.scrollTop = card.scrollHeight;
+            }
+
+            async function streamLLMResponse(text) {
+                responseWrap.style.display = "";
+                responseText.textContent = "";
+                responseText.innerHTML = '<span class="response-thinking">犀宝思考中…</span>';
+                responseCursor.style.display = "none";
+
+                try {
+                    const res = await fetch("/api/chat/stream", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ text }),
+                    });
+
+                    if (!res.ok) {
+                        responseText.textContent = "（犀宝暂时不在线噻…）";
+                        return;
+                    }
+
+                    responseText.textContent = "";
+                    responseCursor.style.display = "inline-block";
+
+                    const reader = res.body.getReader();
+                    const decoder = new TextDecoder();
+                    let buffer = "";
+
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split("\n");
+                        buffer = lines.pop();
+                        for (const line of lines) {
+                            if (!line.startsWith("data: ")) continue;
+                            const payload = line.slice(6);
+                            if (payload === "[DONE]") {
+                                responseCursor.style.display = "none";
+                                return;
+                            }
+                            responseText.textContent += payload;
+                            responseCard.scrollTop = responseCard.scrollHeight;
+                        }
+                    }
+                } catch (err) {
+                    responseText.textContent = "（犀宝睡着了，锤子都叫不醒…）";
+                } finally {
+                    responseCursor.style.display = "none";
+                }
             }
         </script>
     </body>

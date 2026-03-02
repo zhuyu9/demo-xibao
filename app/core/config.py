@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     DASHSCOPE_SAMPLE_RATE: int = 16000
     DASHSCOPE_VOCABULARY_ID: str | None = Field(default=None)
 
+    LLM_API_KEY: str = Field(default="", alias="llm_api_key")
+    LLM_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    LLM_MODEL: str = "qwen-plus"
+
 
 @lru_cache
 def get_settings() -> Settings:
