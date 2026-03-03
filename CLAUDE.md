@@ -9,8 +9,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## 常用命令
 
 ```bash
-# 启动开发服务器
-uvicorn main:app --reload --port 8000
+# 启动开发服务器（--host 0.0.0.0 允许局域网 ESP32 访问）
+uvicorn main:app --reload --port 8000 --host 0.0.0.0
 
 # 安装依赖
 uv sync

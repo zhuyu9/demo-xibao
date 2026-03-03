@@ -30,11 +30,12 @@ class TTSError(Exception):
 class TTSClient:
     """DashScope 流式 TTS 客户端（OpenAI Realtime 协议）。"""
 
-    def __init__(self, api_key: str, ws_url: str, model: str, voice: str):
+    def __init__(self, api_key: str, ws_url: str, model: str, voice: str, response_format: str = "mp3"):
         self.api_key = api_key
         self.ws_url = ws_url
         self.model = model
         self.voice = voice
+        self.response_format = response_format
 
     async def synthesize(self, text: str) -> AsyncIterator[bytes]:
         """合成文字为音频流，yield 二进制 MP3 数据块。"""
@@ -53,13 +54,13 @@ class TTSClient:
                 raise TTSError(f"预期 session.created，收到: {msg.get('type')} | {msg}")
             logger.info("TTS session.created")
 
-            # 配置会话：commit 模式，mp3 输出
+            # 配置会话：commit 模式
             await ws.send(json.dumps({
                 "type": "session.update",
                 "session": {
                     "mode": "commit",
                     "voice": self.voice,
-                    "response_format": "mp3",
+                    "response_format": self.response_format,
                     "sample_rate": 24000,
                 },
             }))
