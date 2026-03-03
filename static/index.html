@@ -581,7 +581,16 @@
             let sourceNode = null;
             let stream = null;
             let ttsEnabled = false;
-            let llmBuffer = "";
+
+            // 分句流式 TTS 状态
+            let sentenceBuffer = "";   // 当前积累的句子片段
+            let ttsQueue = [];         // fetch promise 队列（按顺序）
+            let ttsScheduledEnd = 0;   // 最后一个已调度音频的结束时刻
+            let ttsLastSource = null;  // 最后一个 BufferSource，用于挂 onended
+            let llmStreamDone = false; // LLM 是否已发出 [DONE]
+            let ttsQueueProcessing = false; // 队列是否正在处理中
+
+            const SENTENCE_RE = /[。！？!?…\n]/;
 
             const ttsToggle = document.getElementById("ttsToggle");
             ttsEnabled = ttsToggle.checked;
@@ -739,8 +748,14 @@
                 responseText.innerHTML =
                     '<span class="response-thinking">犀宝思考中…</span>';
                 responseCursor.style.display = "none";
-                llmBuffer = "";
-                let ttsStarted = false;
+
+                // 重置分句 TTS 状态
+                sentenceBuffer = "";
+                ttsQueue = [];
+                ttsScheduledEnd = 0;
+                ttsLastSource = null;
+                llmStreamDone = false;
+                ttsQueueProcessing = false;
 
                 try {
                     const res = await fetch(basePath + "/api/chat/stream", {
@@ -751,6 +766,7 @@
 
                     if (!res.ok) {
                         responseText.textContent = "（犀宝暂时不在线噻…）";
+                        closeAudioCtx();
                         return;
                     }
 
@@ -772,67 +788,103 @@
                             const payload = line.slice(6);
                             if (payload === "[DONE]") {
                                 responseCursor.style.display = "none";
-                                if (ttsEnabled && llmBuffer) {
-                                    ttsStarted = true;
-                                    playTTS(llmBuffer);  // playTTS 负责关闭 audioCtx
+                                llmStreamDone = true;
+                                // 冲刷剩余不含句末标点的尾句
+                                const remaining = sentenceBuffer.trim();
+                                sentenceBuffer = "";
+                                if (ttsEnabled) {
+                                    if (remaining) {
+                                        startTTSFetch(remaining);
+                                        // drainTTSQueue 处理完后会调用 onAllTTSScheduled
+                                    } else if (!ttsQueueProcessing && ttsQueue.length === 0) {
+                                        onAllTTSScheduled();
+                                    }
+                                    // 否则 drainTTSQueue 仍在运行，结束时会调用 onAllTTSScheduled
+                                } else {
+                                    closeAudioCtx();
                                 }
                                 return;
                             }
                             responseText.textContent += payload;
-                            llmBuffer += payload;
+                            // 检测句末标点，命中则立即发起 TTS 请求
+                            if (ttsEnabled) {
+                                sentenceBuffer += payload;
+                                const match = SENTENCE_RE.exec(sentenceBuffer);
+                                if (match) {
+                                    const sentence = sentenceBuffer
+                                        .slice(0, match.index + 1)
+                                        .trim();
+                                    sentenceBuffer = sentenceBuffer.slice(match.index + 1);
+                                    if (sentence) startTTSFetch(sentence);
+                                }
+                            }
                             responseCard.scrollTop = responseCard.scrollHeight;
                         }
                     }
                 } catch (err) {
                     responseText.textContent = "（犀宝睡着了，锤子都叫不醒…）";
+                    closeAudioCtx();
                 } finally {
                     responseCursor.style.display = "none";
-                    if (!ttsStarted) closeAudioCtx();  // TTS 未启动则立即关闭
                 }
             }
 
-            async function playTTS(text) {
+            // 立即发起 TTS fetch，将 promise 推入有序队列
+            function startTTSFetch(text) {
+                if (!ttsEnabled || !text.trim()) return;
+                ttsQueue.push(fetchAndDecodeTTS(text));
+                drainTTSQueue();
+            }
+
+            // 顺序消费队列：fetch 并行，但调度严格按原句顺序串行
+            async function drainTTSQueue() {
+                if (ttsQueueProcessing) return;
+                ttsQueueProcessing = true;
+                while (ttsQueue.length > 0) {
+                    const promise = ttsQueue.shift();
+                    // 按顺序 await：即使后句先下载完，也等前句调度完再排后句
+                    const audioBuffer = await promise;
+                    if (audioBuffer && audioCtx) {
+                        const ctx = audioCtx;
+                        // 调度点 = 上一段结束时刻（或当前时刻+缓冲），保证无缝衔接
+                        const startTime = Math.max(ctx.currentTime + 0.05, ttsScheduledEnd);
+                        ttsScheduledEnd = startTime + audioBuffer.duration;
+                        const source = ctx.createBufferSource();
+                        source.buffer = audioBuffer;
+                        source.connect(ctx.destination);
+                        source.start(startTime);
+                        ttsLastSource = source;
+                    }
+                }
+                ttsQueueProcessing = false;
+                if (llmStreamDone) onAllTTSScheduled();
+            }
+
+            // fetch → decode 仅返回 AudioBuffer，不触碰调度时序
+            async function fetchAndDecodeTTS(text) {
                 try {
                     const res = await fetch(basePath + "/api/tts/stream", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ text }),
                     });
-                    if (!res.ok) { closeAudioCtx(); return; }
+                    if (!res.ok || !audioCtx) return null;
                     const arrayBuffer = await res.arrayBuffer();
-                    // 复用已由用户手势激活的 audioCtx，避免 HTTPS 下 autoplay 被阻止
                     const ctx = audioCtx;
-                    if (!ctx) return;
+                    if (!ctx) return null;
                     if (ctx.state === "suspended") await ctx.resume();
-                    const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
-
-                    // 归一化音频振幅，避免 TTS 输出音量忽高忽低
-                    const targetPeak = 0.9;
-                    let maxAmp = 0;
-                    for (let c = 0; c < audioBuffer.numberOfChannels; c++) {
-                        const data = audioBuffer.getChannelData(c);
-                        for (let i = 0; i < data.length; i++) {
-                            const abs = Math.abs(data[i]);
-                            if (abs > maxAmp) maxAmp = abs;
-                        }
-                    }
-                    if (maxAmp > 0.01 && maxAmp < targetPeak) {
-                        const scale = targetPeak / maxAmp;
-                        for (let c = 0; c < audioBuffer.numberOfChannels; c++) {
-                            const data = audioBuffer.getChannelData(c);
-                            for (let i = 0; i < data.length; i++) {
-                                data[i] *= scale;
-                            }
-                        }
-                    }
-
-                    const source = ctx.createBufferSource();
-                    source.buffer = audioBuffer;
-                    source.connect(ctx.destination);
-                    source.onended = closeAudioCtx;
-                    source.start();
+                    return await ctx.decodeAudioData(arrayBuffer);
                 } catch (err) {
                     console.error("TTS error:", err);
+                    return null;
+                }
+            }
+
+            // 所有句子均已调度完毕，在最后一段播完后关闭 AudioContext
+            function onAllTTSScheduled() {
+                if (ttsLastSource) {
+                    ttsLastSource.onended = closeAudioCtx;
+                } else {
                     closeAudioCtx();
                 }
             }
