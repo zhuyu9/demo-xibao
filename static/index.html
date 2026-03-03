@@ -462,6 +462,95 @@
                 transform: translateX(18px);
             }
 
+            /* ── Conversation History ── */
+            .history-wrap {
+                width: 100%;
+                max-width: 740px;
+                border: 1px solid var(--border);
+                background: var(--bg-card);
+            }
+
+            .history-summary {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                padding: 14px 20px;
+                font-size: 9px;
+                letter-spacing: 0.3em;
+                text-transform: uppercase;
+                color: var(--muted);
+                cursor: pointer;
+                user-select: none;
+                list-style: none;
+                outline: none;
+            }
+            .history-summary::-webkit-details-marker { display: none; }
+            .history-summary:focus-visible { outline: 1px solid var(--accent); }
+
+            .history-badge {
+                background: var(--border);
+                color: var(--muted);
+                font-size: 8px;
+                padding: 2px 7px;
+                letter-spacing: 0.15em;
+            }
+
+            .history-chevron {
+                margin-left: auto;
+                opacity: 0.45;
+                font-size: 10px;
+                transition: transform 0.2s;
+                line-height: 1;
+            }
+
+            details[open] .history-chevron { transform: rotate(180deg); }
+
+            .history-panel {
+                padding: 0 24px 20px;
+                display: flex;
+                flex-direction: column;
+                max-height: 420px;
+                overflow-y: auto;
+                scrollbar-width: thin;
+                scrollbar-color: var(--border) transparent;
+            }
+
+            .history-entry {
+                padding: 16px 0;
+                border-top: 1px solid var(--border);
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+            }
+            .history-entry:first-child { border-top: none; padding-top: 8px; }
+
+            .history-row {
+                display: grid;
+                grid-template-columns: 48px 1fr;
+                gap: 12px;
+                align-items: baseline;
+            }
+
+            .history-role {
+                font-size: 8px;
+                letter-spacing: 0.2em;
+                text-transform: uppercase;
+                opacity: 0.4;
+                white-space: nowrap;
+                padding-top: 2px;
+            }
+
+            .history-content {
+                font-family: "Courier Prime", monospace;
+                font-size: 14px;
+                line-height: 1.75;
+                white-space: pre-wrap;
+                word-break: break-word;
+            }
+
+            .history-row.user .history-content { color: var(--interim); }
+            .history-row.bot .history-content { color: #c48940; }
+
             /* ── Footer ── */
             footer {
                 position: relative;
@@ -544,6 +633,14 @@
                     ></span>
                 </div>
             </div>
+            <details class="history-wrap" id="historyDetails" style="display:none">
+                <summary class="history-summary">
+                    对话历史
+                    <span class="history-badge" id="historyCount">0</span>
+                    <span class="history-chevron">▾</span>
+                </summary>
+                <div class="history-panel" id="historyPanel"></div>
+            </details>
         </main>
 
         <footer>
@@ -562,6 +659,19 @@
                 return segments.length > 0 ? '/' + segments[0] : '';
             })();
 
+            // 会话 ID 持久化到 localStorage，同一浏览器永远使用同一个 ID
+            const SESSION_KEY = "xibao_session_id";
+            const HISTORY_KEY = "xibao_history";
+
+            const sessionId = (() => {
+                let id = localStorage.getItem(SESSION_KEY);
+                if (!id) {
+                    id = crypto.randomUUID();
+                    localStorage.setItem(SESSION_KEY, id);
+                }
+                return id;
+            })();
+
             const btnWrap = document.getElementById("btnWrap");
             const btn = document.getElementById("btnRecord");
             const statusEl = document.getElementById("status");
@@ -573,6 +683,12 @@
             const responseCard = document.getElementById("responseCard");
             const responseText = document.getElementById("responseText");
             const responseCursor = document.getElementById("responseCursor");
+            const historyDetails = document.getElementById("historyDetails");
+            const historyPanel = document.getElementById("historyPanel");
+            const historyCountEl = document.getElementById("historyCount");
+
+            let conversationHistory = [];
+            let currentResponseText = "";
 
             let isRecording = false;
             let ws = null;
@@ -749,6 +865,9 @@
                     '<span class="response-thinking">犀宝思考中…</span>';
                 responseCursor.style.display = "none";
 
+                // 重置当前回复文本
+                currentResponseText = "";
+
                 // 重置分句 TTS 状态
                 sentenceBuffer = "";
                 ttsQueue = [];
@@ -761,7 +880,7 @@
                     const res = await fetch(basePath + "/api/chat/stream", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ text }),
+                        body: JSON.stringify({ text, session_id: sessionId }),
                     });
 
                     if (!res.ok) {
@@ -788,6 +907,7 @@
                             const payload = line.slice(6);
                             if (payload === "[DONE]") {
                                 responseCursor.style.display = "none";
+                                addHistoryEntry(text, currentResponseText);
                                 llmStreamDone = true;
                                 // 冲刷剩余不含句末标点的尾句
                                 const remaining = sentenceBuffer.trim();
@@ -806,6 +926,7 @@
                                 return;
                             }
                             responseText.textContent += payload;
+                            currentResponseText += payload;
                             // 检测句末标点，命中则立即发起 TTS 请求
                             if (ttsEnabled) {
                                 sentenceBuffer += payload;
@@ -888,6 +1009,57 @@
                     closeAudioCtx();
                 }
             }
+
+            // ── Conversation History ──
+            function renderHistoryEntry(userText, botText) {
+                const entry = document.createElement("div");
+                entry.className = "history-entry";
+
+                const userRow = document.createElement("div");
+                userRow.className = "history-row user";
+                userRow.innerHTML =
+                    `<span class="history-role">老大</span>` +
+                    `<span class="history-content">${escapeHtml(userText)}</span>`;
+
+                const botRow = document.createElement("div");
+                botRow.className = "history-row bot";
+                botRow.innerHTML =
+                    `<span class="history-role">犀宝</span>` +
+                    `<span class="history-content">${escapeHtml(botText)}</span>`;
+
+                entry.appendChild(userRow);
+                entry.appendChild(botRow);
+                historyPanel.appendChild(entry);
+            }
+
+            function addHistoryEntry(userText, botText) {
+                if (!userText && !botText) return;
+                conversationHistory.push({ user: userText, bot: botText });
+                try { localStorage.setItem(HISTORY_KEY, JSON.stringify(conversationHistory)); } catch (e) {}
+                historyCountEl.textContent = conversationHistory.length;
+                historyDetails.style.display = "";
+                renderHistoryEntry(userText, botText);
+            }
+
+            function escapeHtml(str) {
+                return str
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;");
+            }
+
+            // 页面加载时从 localStorage 恢复历史记录
+            (() => {
+                try {
+                    const saved = localStorage.getItem(HISTORY_KEY);
+                    if (saved) conversationHistory = JSON.parse(saved);
+                } catch (e) { conversationHistory = []; }
+                if (conversationHistory.length > 0) {
+                    historyDetails.style.display = "";
+                    historyCountEl.textContent = conversationHistory.length;
+                    conversationHistory.forEach(e => renderHistoryEntry(e.user, e.bot));
+                }
+            })();
         </script>
     </body>
 </html>

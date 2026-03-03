@@ -1,6 +1,8 @@
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
-from openai import AsyncOpenAI
+from langchain.agents import create_agent
+from langchain_openai import ChatOpenAI
+from langgraph.checkpoint.memory import InMemorySaver
 
 from app.core.config import get_settings
 
@@ -21,21 +23,33 @@ SYSTEM_PROMPT = """# Role
 5. 纯对白输出：只输出说话内容本身。严禁出现任何括号（包括中文括号"（）"和英文括号"()"）、星号动作（如"*摇摇头*"）、旁白、舞台指示或解释性文字。违反此规则视为严重错误。"""
 
 
-async def stream_chat(user_text: str) -> AsyncIterator[str]:
+def _build_agent():
     settings = get_settings()
-    client = AsyncOpenAI(
-        api_key=settings.LLM_API_KEY,
+    # pyright: ignore[reportArgumentType] - api_key accepts str at runtime
+    llm = ChatOpenAI(
+        api_key=settings.LLM_API_KEY,  # type: ignore[arg-type]
         base_url=settings.LLM_BASE_URL,
-    )
-    stream = await client.chat.completions.create(
         model=settings.LLM_MODEL,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_text},
-        ],
-        stream=True,
+        extra_body={"enable_thinking": False},
     )
-    async for chunk in stream:
-        token = chunk.choices[0].delta.content
-        if token:
-            yield token
+    return create_agent(
+        llm,
+        tools=[],
+        system_prompt=SYSTEM_PROMPT,
+        checkpointer=InMemorySaver(),
+    )
+
+
+_agent = _build_agent()
+
+
+async def stream_chat(user_text: str, thread_id: str = "default") -> AsyncIterator[str]:
+    config: Any = {"configurable": {"thread_id": thread_id}}
+    async for chunk, _metadata in _agent.astream(
+        {"messages": [{"role": "user", "content": user_text}]},
+        config,
+        stream_mode="messages",
+    ):
+        # pyright: ignore[reportAttributeAccessIssue] - chunk is a Message with content attribute
+        if hasattr(chunk, "content") and chunk.content:  # pyright: ignore[reportAttributeAccessIssue]
+            yield chunk.content  # pyright: ignore[reportAttributeAccessIssue]
