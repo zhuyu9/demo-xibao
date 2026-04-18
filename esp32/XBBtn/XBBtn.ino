@@ -1,11 +1,15 @@
 #include <WiFi.h>
 #include <driver/i2s.h>
 #include <Preferences.h>
+#include <new>
+#include <time.h>
 
 #include "M5Atom.h"
 #include <ArduinoWebsockets.h>
 #include <ArduinoJson.h>
+#include <mbedtls/md.h>
 #include <mbedtls/base64.h>
+#include <mbedtls/sha256.h>
 #include <string>
 
 const char *WifiSSID = "Z-HOME";
@@ -219,6 +223,120 @@ void markWsActivity();
 
 String makeRequestID() {
     return String("req_") + DEVICE_ID + "_" + String((uint32_t)millis());
+}
+
+String hexEncode(const uint8_t *data, size_t len) {
+    if (!data || len == 0) {
+        return "";
+    }
+
+    static const char HEX_DIGITS[] = "0123456789abcdef";
+    String out;
+    out.reserve(len * 2);
+    for (size_t i = 0; i < len; ++i) {
+        out += HEX_DIGITS[(data[i] >> 4) & 0x0F];
+        out += HEX_DIGITS[data[i] & 0x0F];
+    }
+    return out;
+}
+
+String utcTimestamp() {
+    time_t now = time(nullptr);
+    struct tm tm_utc;
+    gmtime_r(&now, &tm_utc);
+
+    char buffer[32];
+    strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%SZ", &tm_utc);
+    return String(buffer);
+}
+
+bool syncClockForAuth() {
+#if TOY_AUTH_MODE == AUTH_MODE_HMAC
+    configTime(0, 0, "pool.ntp.org", "time.google.com", "time.nist.gov");
+
+    const unsigned long timeoutMs = 15000;
+    const time_t minValidEpoch = 1700000000;
+    unsigned long start = millis();
+    while (millis() - start < timeoutMs) {
+        time_t now = time(nullptr);
+        if (now >= minValidEpoch) {
+            Serial.printf("[auth] clock synced: %s\n", utcTimestamp().c_str());
+            return true;
+        }
+        delay(200);
+    }
+
+    Serial.println("[auth] clock sync failed");
+    return false;
+#else
+    return true;
+#endif
+}
+
+String hmacSHA256Hex(const String &message, const char *secret) {
+#if TOY_AUTH_MODE == AUTH_MODE_HMAC
+    if (!secret || secret[0] == '\0') {
+        return "";
+    }
+
+    const mbedtls_md_info_t *mdInfo = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+    if (!mdInfo) {
+        Serial.println("[auth] sha256 md info unavailable");
+        return "";
+    }
+
+    uint8_t digest[MBEDTLS_SHA256_DIGEST_SIZE];
+    int rc = mbedtls_md_hmac(mdInfo,
+                             (const unsigned char *)secret,
+                             strlen(secret),
+                             (const unsigned char *)message.c_str(),
+                             message.length(),
+                             digest);
+    if (rc != 0) {
+        Serial.printf("[auth] hmac failed: %d\n", rc);
+        return "";
+    }
+
+    return hexEncode(digest, sizeof(digest));
+#else
+    (void)message;
+    (void)secret;
+    return "";
+#endif
+}
+
+void resetWebSocketClient() {
+    ws_client.~WebsocketsClient();
+    new (&ws_client) websockets::WebsocketsClient();
+}
+
+bool addAuthHeadersIfNeeded() {
+#if TOY_AUTH_MODE == AUTH_MODE_HMAC
+    const char *secret = TOY_DEVICE_SECRET;
+    if (!secret || secret[0] == '\0') {
+        Serial.println("[auth] TOY_DEVICE_SECRET is empty");
+        return false;
+    }
+
+    String timestamp = utcTimestamp();
+    String canonical = String("GET\n") +
+                       TOY_CLOUD_WS_PATH + "\n" +
+                       "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n" +
+                       timestamp + "\n" +
+                       DEVICE_ID;
+    String signature = hmacSHA256Hex(canonical, secret);
+    if (signature.length() == 0) {
+        Serial.println("[auth] signature generation failed");
+        return false;
+    }
+
+    ws_client.addHeader("X-Toy-Device-Id", DEVICE_ID);
+    ws_client.addHeader("X-Toy-Timestamp", timestamp);
+    ws_client.addHeader("X-Toy-Signature", String("hmac-sha256=") + signature);
+    return true;
+#else
+    return true;
+#endif
 }
 
 String base64EncodeBytes(const uint8_t *data, size_t len) {
@@ -487,8 +605,14 @@ void closeDeviceWebSocketIfOpen(const char *reason) {
 
 bool connectDeviceWebSocket() {
     g_lastWsConnectAttemptAtMs = millis();
+    resetWebSocketClient();
     ws_client.onMessage(onWebsocketMessage);
     ws_client.onEvent(onWebsocketEvent);
+    if (!addAuthHeadersIfNeeded()) {
+        isWebSocketConnected = false;
+        Serial.println("[ws] auth header setup failed");
+        return false;
+    }
 
     Serial.printf("Connect ws://%s:%d%s\n", TOY_CLOUD_HOST, TOY_CLOUD_PORT, TOY_CLOUD_WS_PATH);
 
@@ -768,6 +892,11 @@ void setup() {
     setState(STATE_IDLE);
 
     if (!connectWifi()) {
+        return;
+    }
+
+    if (!syncClockForAuth()) {
+        setState(STATE_ERROR);
         return;
     }
 
