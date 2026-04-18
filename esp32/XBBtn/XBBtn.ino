@@ -9,10 +9,25 @@
 const char *WifiSSID = "Z-HOME";
 const char *WifiPWD  = "perfect56";
 
-// demo-xibao 后端配置（局域网 IP + 端口）
-#define BFF_SERVER_HOST "192.168.3.214"
-#define BFF_SERVER_PORT 8000
-#define DEVICE_WS_PATH  "/api/device/ws"
+// Toy Cloud backend config. Use ws:// in local development.
+#define TOY_CLOUD_HOST "192.168.3.214"
+#define TOY_CLOUD_PORT 8080
+#define TOY_CLOUD_WS_PATH "/v1/toy/audio-stream"
+
+#define DEVICE_ID "toy_000123"
+#define CHARACTER_ID "shixi"
+#define FIRMWARE_VERSION "esp32-xbbtn-0.2.0"
+#define LOCALE "zh-CN"
+
+#define AUTH_MODE_DISABLED 0
+#define AUTH_MODE_HMAC 1
+#define TOY_AUTH_MODE AUTH_MODE_DISABLED
+#define TOY_DEVICE_SECRET ""
+
+static String g_requestId;
+static String g_sessionId;
+static int g_nextAudioSeq = 1;
+static int g_expectedAudioSeq = 1;
 
 #define CONFIG_I2S_BCK_PIN     19
 #define CONFIG_I2S_LRCK_PIN    33
@@ -322,9 +337,9 @@ bool connectDeviceWebSocket() {
     ws_client.onMessage(onWebsocketMessage);
     ws_client.onEvent(onWebsocketEvent);
 
-    Serial.printf("Connect ws://%s:%d%s\n", BFF_SERVER_HOST, BFF_SERVER_PORT, DEVICE_WS_PATH);
+    Serial.printf("Connect ws://%s:%d%s\n", TOY_CLOUD_HOST, TOY_CLOUD_PORT, TOY_CLOUD_WS_PATH);
 
-    bool ok = ws_client.connect(BFF_SERVER_HOST, BFF_SERVER_PORT, DEVICE_WS_PATH);
+    bool ok = ws_client.connect(TOY_CLOUD_HOST, TOY_CLOUD_PORT, TOY_CLOUD_WS_PATH);
     if (!ok) {
         isWebSocketConnected = false;
         Serial.println("[ws] connect failed");
