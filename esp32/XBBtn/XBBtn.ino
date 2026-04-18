@@ -468,6 +468,11 @@ void startVoiceSession() {
         return;
     }
 
+    if (!sendSessionStart()) {
+        setState(STATE_ERROR);
+        return;
+    }
+
     if (!ensureI2SMode(MODE_MIC)) {
         setState(STATE_ERROR);
         return;
@@ -484,8 +489,10 @@ void finishVoiceSession() {
         return;
     }
 
-    ws_client.send("finish");
-    markWsActivity();
+    if (!sendAudioFinish()) {
+        setState(STATE_ERROR);
+        return;
+    }
 
     Serial.println("session finish sent");
     printMicCaptureStats("session");
@@ -902,8 +909,10 @@ void loop() {
                     applyMicFadeOutTail(sendPtr, sendLen);
                 }
                 maybePrintMicCaptureStats();
-                ws_client.sendBinary((const char *)sendPtr, sendLen);
-                markWsActivity();
+                if (!sendAudioAppend(sendPtr, sendLen)) {
+                    setState(STATE_ERROR);
+                    return;
+                }
             }
         }
 
