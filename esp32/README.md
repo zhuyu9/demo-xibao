@@ -35,15 +35,21 @@ Board：`M5Stack-ATOM`（需先安装 M5Stack Arduino 板包）
 const char *WifiSSID = "your-ssid";
 const char *WifiPWD  = "your-password";
 
-// demo-xibao 后端（局域网 IP，需与 ESP32 在同一网段）
-#define BFF_SERVER_HOST "192.168.x.x"
-#define BFF_SERVER_PORT 8000
+// Toy Cloud backend（局域网 IP，需与 ESP32 在同一网段）
+#define TOY_CLOUD_HOST "192.168.x.x"
+#define TOY_CLOUD_PORT 8080
+#define TOY_CLOUD_WS_PATH "/v1/toy/audio-stream"
+
+#define DEVICE_ID "toy_000123"
+#define CHARACTER_ID "shixi"
+#define FIRMWARE_VERSION "esp32-xbbtn-0.2.0"
 ```
 
 后端启动命令：
 
 ```bash
-uvicorn main:app --reload --port 8000 --host 0.0.0.0
+cd /Volumes/x5/projects/cdm/xi/toy-cloud
+TOY_CLOUD_AUTH_MODE=disabled TOY_CLOUD_LLM_PROVIDER=fake go run ./cmd/toy-cloud
 ```
 
 ## 使用方法
@@ -63,20 +69,29 @@ uvicorn main:app --reload --port 8000 --host 0.0.0.0
 | 品红 | PLAYBACK（播放中）|
 | 红色 | ERROR |
 
-## 后端协议（WebSocket `/api/device/ws`）
+## 会话与认证
+
+1. 固件将 `session_id` 存入 ESP32 NVS `Preferences`，下次 `session.start` 时携带，重启后也会保留。
+2. 开发环境使用 `TOY_CLOUD_AUTH_MODE=disabled`。
+3. 试点版 HMAC 认证使用 `TOY_AUTH_MODE=AUTH_MODE_HMAC` 和 `TOY_DEVICE_SECRET`。
+4. 完成 NTP 同步后，HMAC 请求携带 `X-Toy-Device-Id`、`X-Toy-Timestamp`、`X-Toy-Signature`。
+
+## 后端协议（WebSocket `/v1/toy/audio-stream`）
 
 ```
-ESP32 → 后端：
-  <二进制>      PCM 16kHz Int16 mono 音频块
-  "finish"      录音结束信号
+ESP32 → Toy Cloud：
+  {"type":"session.start",...}   开始 push-to-talk 语音会话
+  {"type":"audio.append",...}    base64 PCM 16kHz Int16 mono 音频块，seq 递增
+  {"type":"audio.finish",...}    录音结束
 
-后端 → ESP32：
-  {"type":"asr","text":"...","is_final":bool}        ASR 实时结果
-  {"type":"tts.start","sample_rate":24000,
-   "format":"pcm_s16le","channels":1,"voice":"..."}  TTS 开始
-  <二进制>                                            PCM 24kHz Int16 mono 音频
-  {"type":"tts.end"}                                 TTS 结束
-  {"type":"error","message":"..."}                   错误
+Toy Cloud → ESP32：
+  {"type":"asr.partial",...}     ASR 中间结果
+  {"type":"asr.final",...}       ASR 最终结果
+  {"type":"assistant.reply_text","reply_text":"...","session_id":"..."}  回复文本和新 session_id
+  {"type":"assistant.audio_start",...}  PCM 16kHz Int16 mono 播放格式
+  {"type":"assistant.audio_delta",...}  base64 PCM 音频块
+  {"type":"assistant.audio_done"}       音频结束
+  {"type":"error","code":"...","message":"...","retryable":bool}  错误
 ```
 
 ## 麦克风调参
