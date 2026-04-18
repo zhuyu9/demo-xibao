@@ -6,6 +6,7 @@
 #include <ArduinoWebsockets.h>
 #include <ArduinoJson.h>
 #include <mbedtls/base64.h>
+#include <string>
 
 const char *WifiSSID = "Z-HOME";
 const char *WifiPWD  = "perfect56";
@@ -110,7 +111,11 @@ float g_micHpfPrevOut = 0.0f;
 #define SPEAKER_RING_BUFFER_SIZE 65536
 #define SPEAKER_PLAY_CHUNK_SIZE 2048
 #define SPEAKER_PREBUFFER_BYTES 8192
+#define AUDIO_DECODE_BUFFER_SIZE 4096
+#define WS_TEXT_BUFFER_SIZE 6144
 static uint8_t g_speakerRing[SPEAKER_RING_BUFFER_SIZE];
+static uint8_t g_audioDecodeBuffer[AUDIO_DECODE_BUFFER_SIZE];
+static char g_wsTextBuffer[WS_TEXT_BUFFER_SIZE];
 volatile size_t g_speakerHead = 0;
 volatile size_t g_speakerTail = 0;
 volatile bool g_ttsActive = false;
@@ -135,6 +140,14 @@ size_t speakerRingFree() {
 void speakerRingReset() {
     g_speakerHead = 0;
     g_speakerTail = 0;
+}
+
+void resetPlaybackStateForError() {
+    g_ttsActive = false;
+    g_ttsPcmReady = true;
+    g_pcmCarryValid = false;
+    g_playbackStarted = false;
+    speakerRingReset();
 }
 
 void enqueueSpeakerPcm(const uint8_t *data, size_t len) {
@@ -223,6 +236,37 @@ String base64EncodeBytes(const uint8_t *data, size_t len) {
     }
     g_audioBase64Buffer[outLen] = '\0';
     return String(g_audioBase64Buffer);
+}
+
+bool base64DecodeToAudioBuffer(const char *encoded, uint8_t **outData, size_t *outLen) {
+    *outData = NULL;
+    *outLen = 0;
+    if (!encoded || encoded[0] == '\0') {
+        Serial.println("[b64] empty audio payload");
+        return false;
+    }
+
+    size_t encodedLen = strlen(encoded);
+    size_t decodedLen = 0;
+    int probe = mbedtls_base64_decode(NULL, 0, &decodedLen, (const unsigned char *)encoded, encodedLen);
+    if (probe != MBEDTLS_ERR_BASE64_BUFFER_TOO_SMALL && probe != 0) {
+        Serial.printf("[b64] decode probe failed: %d\n", probe);
+        return false;
+    }
+    if (decodedLen == 0 || decodedLen > AUDIO_DECODE_BUFFER_SIZE) {
+        Serial.printf("[b64] decoded audio size invalid: %u\n", (unsigned int)decodedLen);
+        return false;
+    }
+
+    int rc = mbedtls_base64_decode(g_audioDecodeBuffer, AUDIO_DECODE_BUFFER_SIZE, &decodedLen, (const unsigned char *)encoded, encodedLen);
+    if (rc != 0) {
+        Serial.printf("[b64] decode failed: %d\n", rc);
+        return false;
+    }
+
+    *outData = g_audioDecodeBuffer;
+    *outLen = decodedLen;
+    return true;
 }
 
 bool sendJsonDocument(JsonDocument &doc, const char *tag) {
@@ -733,76 +777,139 @@ void setup() {
 void onWebsocketMessage(websockets::WebsocketsMessage message) {
     markWsActivity();
     if (message.isText()) {
-        String text = message.c_str();
+        const std::string &text = message.rawData();
         Serial.printf("[ws] %s\n", text.c_str());
 
-        StaticJsonDocument<512> doc;
-        if (deserializeJson(doc, text)) {
+        if (text.length() >= WS_TEXT_BUFFER_SIZE) {
+            Serial.printf("[ws] text frame too large: %u\n", (unsigned int)text.length());
+            resetPlaybackStateForError();
+            setState(STATE_ERROR);
+            return;
+        }
+        // Parse from a fixed writable buffer so ArduinoJson can use zero-copy
+        // string storage without mutating WebsocketsMessage internals or heap-copying
+        // large assistant.audio_delta base64 payloads.
+        memcpy(g_wsTextBuffer, text.c_str(), text.length() + 1);
+        StaticJsonDocument<1024> doc;
+        if (deserializeJson(doc, g_wsTextBuffer)) {
             return;
         }
 
         String type = doc["type"].as<String>();
-        if (type == "asr") {
+        if (type == "asr.partial" || type == "asr.final") {
             String asrText = doc["text"].as<String>();
-            bool isFinal = doc["is_final"] | false;
-            Serial.printf("[asr]%s %s\n", isFinal ? " [FINAL]" : "", asrText.c_str());
-        } else if (type == "error") {
-            Serial.printf("[ws] error: %s\n", doc["message"].as<String>().c_str());
-            setState(STATE_ERROR);
-        } else if (type == "tts.start") {
+            Serial.printf("[%s] %s\n", type.c_str(), asrText.c_str());
+        } else if (type == "assistant.reply_text") {
+            String replyText = doc["reply_text"].as<String>();
+            String newSessionId = doc["session_id"].as<String>();
+            bool shouldReset = doc["should_reset"] | false;
+            Serial.printf("[assistant.reply_text] %s\n", replyText.c_str());
+            if (shouldReset) {
+                clearSessionID();
+            } else if (newSessionId.length() > 0) {
+                saveSessionID(newSessionId);
+            }
+        } else if (type == "assistant.audio_start") {
+            JsonVariant audioVariant = doc["audio"];
+            JsonObject audio = audioVariant.as<JsonObject>();
+            String format = audio["format"].as<String>();
+            int channels = audio["channels"] | 0;
+            int sampleRate = audio["sample_rate"] | 0;
+
             g_ttsActive = true;
             g_ttsBytesInCurrent = 0;
             g_playbackStarted = false;
             g_pcmCarryValid = false;
+            g_expectedAudioSeq = 1;
             speakerRingReset();
-            int sr = doc["sample_rate"] | 24000;
-            if (sr < 8000 || sr > 48000) {
-                sr = 24000;
-            }
-            g_speakerSampleRate = sr;
-            String fmt = doc["format"].as<String>();
-            int channels = doc["channels"] | 1;
-            g_ttsPcmReady = (fmt == "pcm_s16le" && channels == 1);
+            g_speakerSampleRate = sampleRate;
+            g_ttsPcmReady = (format == "pcm" && channels == 1 && sampleRate == 16000);
             if (!g_ttsPcmReady) {
-                Serial.printf("[tts] unsupported stream fmt=%s ch=%d\n", fmt.c_str(), channels);
+                Serial.printf("[assistant.audio_start] unsupported stream fmt=%s ch=%d sr=%d\n",
+                              format.c_str(),
+                              channels,
+                              sampleRate);
+                resetPlaybackStateForError();
+                setState(STATE_ERROR);
+                return;
             }
-            Serial.printf("[tts] start sr=%d ch=%d fmt=%s voice=%s\n",
+            Serial.printf("[assistant.audio_start] start sr=%d ch=%d fmt=%s\n",
                           g_speakerSampleRate,
                           channels,
-                          fmt.c_str(),
-                          doc["voice"].as<String>().c_str());
+                          format.c_str());
             if (g_state != STATE_RECORDING) {
                 setState(STATE_PLAYBACK);
             }
-        } else if (type == "tts.end") {
+        } else if (type == "assistant.audio_delta") {
+            if (!g_ttsActive || !g_ttsPcmReady) {
+                return;
+            }
+            int seq = doc["seq"] | 0;
+            if (seq != g_expectedAudioSeq) {
+                Serial.printf("[assistant.audio_delta] seq gap expected=%d got=%d\n",
+                              g_expectedAudioSeq,
+                              seq);
+                g_expectedAudioSeq = seq;
+            }
+            g_expectedAudioSeq += 1;
+
+            const char *encoded = doc["audio"] | "";
+            if (!encoded || encoded[0] == '\0') {
+                Serial.println("[assistant.audio_delta] missing or empty audio payload");
+                resetPlaybackStateForError();
+                setState(STATE_ERROR);
+                return;
+            }
+
+            uint8_t *raw = NULL;
+            size_t rawLen = 0;
+            if (!base64DecodeToAudioBuffer(encoded, &raw, &rawLen)) {
+                resetPlaybackStateForError();
+                setState(STATE_ERROR);
+                return;
+            }
+
+            if (rawLen > 0) {
+                enqueueSpeakerPcmS16(raw, rawLen);
+                if (g_state != STATE_RECORDING) {
+                    setState(STATE_PLAYBACK);
+                }
+            }
+        } else if (type == "assistant.audio_done") {
+            if (!g_ttsActive) {
+                Serial.println("[assistant.audio_done] ignored stale done event");
+                return;
+            }
             g_ttsActive = false;
             g_ttsPcmReady = true;
             g_pcmCarryValid = false;
-            Serial.printf("[tts] end bytes=%u buffered=%u\n",
+            Serial.printf("[assistant.audio_done] bytes=%u buffered=%u\n",
                           (unsigned int)g_ttsBytesInCurrent,
                           (unsigned int)speakerRingUsed());
-            if (g_state != STATE_RECORDING && speakerRingUsed() == 0) {
+            if (g_state == STATE_RECORDING && speakerRingUsed() > 0) {
+                g_playbackStarted = false;
+                setState(STATE_PLAYBACK);
+                return;
+            }
+            if (g_state != STATE_ERROR && g_state != STATE_RECORDING && speakerRingUsed() == 0) {
                 g_playbackStarted = false;
                 setState(STATE_READY);
             }
+        } else if (type == "error") {
+            String code = doc["code"].as<String>();
+            String message = doc["message"].as<String>();
+            bool retryable = doc["retryable"] | false;
+            Serial.printf("[ws][error] code=%s retryable=%s message=%s\n",
+                          code.c_str(),
+                          retryable ? "true" : "false",
+                          message.c_str());
+            resetPlaybackStateForError();
+            setState(STATE_ERROR);
         }
         return;
     }
 
-    const std::string &raw = message.rawData();
-    if (!raw.empty()) {
-        if (g_state != STATE_RECORDING) {
-            if (!g_ttsPcmReady) {
-                return;
-            }
-            if (raw.length() > 4096) {
-                Serial.printf("[ws] drop large binary frame: %u\n", (unsigned int)raw.length());
-                return;
-            }
-            setState(STATE_PLAYBACK);
-            enqueueSpeakerPcmS16((const uint8_t *)raw.data(), raw.length());
-        }
-    }
+    Serial.println("[ws] unexpected binary frame ignored");
 }
 
 void onWebsocketEvent(websockets::WebsocketsEvent event, String data) {
