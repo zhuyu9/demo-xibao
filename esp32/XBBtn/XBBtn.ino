@@ -1,5 +1,6 @@
 #include <WiFi.h>
 #include <driver/i2s.h>
+#include <Preferences.h>
 
 #include "M5Atom.h"
 #include <ArduinoWebsockets.h>
@@ -28,6 +29,9 @@ static String g_requestId;
 static String g_sessionId;
 static int g_nextAudioSeq = 1;
 static int g_expectedAudioSeq = 1;
+Preferences g_prefs;
+static const char *PREF_NAMESPACE = "toy-cloud";
+static const char *PREF_SESSION_ID = "session_id";
 
 #define CONFIG_I2S_BCK_PIN     19
 #define CONFIG_I2S_LRCK_PIN    33
@@ -169,6 +173,31 @@ void enqueueSpeakerPcmS16(const uint8_t *data, size_t len) {
         g_pcmCarryByte = data[len - 1];
         g_pcmCarryValid = true;
     }
+}
+
+void loadSessionID() {
+    g_prefs.begin(PREF_NAMESPACE, false);
+    g_sessionId = g_prefs.getString(PREF_SESSION_ID, "");
+    if (g_sessionId.length() > 0) {
+        Serial.printf("[session] loaded session_id=%s\n", g_sessionId.c_str());
+    } else {
+        Serial.println("[session] no stored session_id");
+    }
+}
+
+void saveSessionID(const String &sessionId) {
+    if (sessionId.length() == 0) {
+        return;
+    }
+    g_sessionId = sessionId;
+    bool ok = g_prefs.putString(PREF_SESSION_ID, sessionId) > 0;
+    Serial.printf("[session] save %s session_id=%s\n", ok ? "ok" : "failed", sessionId.c_str());
+}
+
+void clearSessionID() {
+    g_sessionId = "";
+    bool ok = g_prefs.remove(PREF_SESSION_ID);
+    Serial.printf("[session] clear %s\n", ok ? "ok" : "failed");
 }
 
 bool InitI2SSpeakOrMic(int mode) {
@@ -602,6 +631,7 @@ void setup() {
 
     delay(200);
     Serial.println("XBBtn Booting...");
+    loadSessionID();
 
     InitI2SSpeakOrMic(MODE_SPK);
     setState(STATE_IDLE);
