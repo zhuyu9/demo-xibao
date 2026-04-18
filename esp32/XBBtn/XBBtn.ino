@@ -5,7 +5,7 @@
 #include "M5Atom.h"
 #include <ArduinoWebsockets.h>
 #include <ArduinoJson.h>
-#include <string>
+#include <mbedtls/base64.h>
 
 const char *WifiSSID = "Z-HOME";
 const char *WifiPWD  = "perfect56";
@@ -66,6 +66,8 @@ static const unsigned long WS_RECONNECT_BACKOFF_MS = 1500;
 
 #define I2S_READ_CHUNK_SIZE 1024
 static uint8_t i2s_read_buffer[I2S_READ_CHUNK_SIZE];
+static const size_t AUDIO_BASE64_BUFFER_SIZE = 4 * ((I2S_READ_CHUNK_SIZE + 2) / 3) + 1;
+static char g_audioBase64Buffer[AUDIO_BASE64_BUFFER_SIZE];
 int g_currentI2SMode = MODE_SPK;
 bool g_i2sInstalled = false;
 int g_speakerSampleRate = 24000;
@@ -200,6 +202,85 @@ void clearSessionID() {
     Serial.printf("[session] clear %s\n", ok ? "ok" : "failed");
 }
 
+void markWsActivity();
+
+String makeRequestID() {
+    return String("req_") + DEVICE_ID + "_" + String((uint32_t)millis());
+}
+
+String base64EncodeBytes(const uint8_t *data, size_t len) {
+    if (!data || len == 0) {
+        return "";
+    }
+    if (len > I2S_READ_CHUNK_SIZE) {
+        Serial.println("[b64] input too large");
+        return "";
+    }
+    size_t outLen = 0;
+    if (mbedtls_base64_encode((unsigned char *)g_audioBase64Buffer, AUDIO_BASE64_BUFFER_SIZE - 1, &outLen, data, len) != 0) {
+        Serial.println("[b64] encode failed");
+        return "";
+    }
+    g_audioBase64Buffer[outLen] = '\0';
+    return String(g_audioBase64Buffer);
+}
+
+bool sendJsonDocument(JsonDocument &doc, const char *tag) {
+    String payload;
+    payload.reserve(measureJson(doc) + 1);
+    serializeJson(doc, payload);
+    bool ok = ws_client.send(payload);
+    if (ok) {
+        markWsActivity();
+    }
+    Serial.printf("[ws][send] %s %s bytes=%u\n", tag, ok ? "ok" : "failed", (unsigned int)payload.length());
+    return ok;
+}
+
+bool sendSessionStart() {
+    g_requestId = makeRequestID();
+    g_nextAudioSeq = 1;
+    g_expectedAudioSeq = 1;
+
+    StaticJsonDocument<512> doc;
+    doc["type"] = "session.start";
+    doc["request_id"] = g_requestId;
+    doc["device_id"] = DEVICE_ID;
+    doc["character_id"] = CHARACTER_ID;
+    if (g_sessionId.length() > 0) {
+        doc["session_id"] = g_sessionId;
+    }
+    doc["locale"] = LOCALE;
+    doc["firmware_version"] = FIRMWARE_VERSION;
+    JsonObject audio = doc.createNestedObject("audio");
+    audio["format"] = "pcm";
+    audio["sample_rate"] = 16000;
+    audio["channels"] = 1;
+    return sendJsonDocument(doc, "session.start");
+}
+
+bool sendAudioAppend(const uint8_t *data, size_t len) {
+    if (!data || len == 0) {
+        return true;
+    }
+    String encoded = base64EncodeBytes(data, len);
+    if (encoded.length() == 0) {
+        return false;
+    }
+
+    StaticJsonDocument<1792> doc;
+    doc["type"] = "audio.append";
+    doc["seq"] = g_nextAudioSeq++;
+    doc["audio"] = encoded;
+    return sendJsonDocument(doc, "audio.append");
+}
+
+bool sendAudioFinish() {
+    StaticJsonDocument<96> doc;
+    doc["type"] = "audio.finish";
+    return sendJsonDocument(doc, "audio.finish");
+}
+
 bool InitI2SSpeakOrMic(int mode) {
     esp_err_t err = ESP_OK;
 
@@ -330,7 +411,6 @@ void resetMicCaptureStats();
 void printMicCaptureStats(const char *tag);
 void maybePrintMicCaptureStats();
 void applyMicFadeOutTail(uint8_t *data, size_t len);
-void markWsActivity();
 bool isWsConnectionRequired(bool buttonPressed);
 void closeDeviceWebSocketIfOpen(const char *reason);
 
