@@ -139,8 +139,18 @@ class DashScopeSpeechClient:
                 event_type = data.get("type", "")
                 logger.debug(f"Realtime event: {event_type}")
 
-                if event_type == "conversation.item.input_audio_transcription.completed":
-                    transcript = data.get("transcript", "")
+                if event_type == "conversation.item.input_audio_transcription.text":
+                    # DashScope 流式转录事件，文本在 text 或 stash 字段
+                    text = data.get("text") or data.get("stash") or ""
+                    if text:
+                        on_result({
+                            "type": "result",
+                            "text": text,
+                            "is_final": False,
+                        })
+
+                elif event_type == "conversation.item.input_audio_transcription.completed":
+                    transcript = data.get("transcript") or data.get("text") or data.get("stash") or ""
                     logger.info(f"Transcription completed: {transcript!r}")
                     if transcript:
                         on_result({
