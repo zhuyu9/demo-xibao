@@ -56,19 +56,23 @@ async def device_websocket(websocket: WebSocket) -> None:
                 finished_event.set()
                 return
             if rtype == "result":
+                text = result.get("text", "")
+                is_final = result.get("is_final", False)
+                if text:
+                    final_text = text
                 if websocket.client_state == WebSocketState.CONNECTED:
                     try:
                         await websocket.send_json(
                             {
                                 "type": "asr",
-                                "text": result.get("text", ""),
-                                "is_final": result.get("is_final", False),
+                                "text": text,
+                                "is_final": is_final,
                             }
                         )
                     except Exception:
                         pass
-                if result.get("is_final"):
-                    final_text = result.get("text", "")
+                if is_final:
+                    finished_event.set()
 
         await asr_client.start_task(
             SpeechRecognitionConfig(
@@ -95,9 +99,9 @@ async def device_websocket(websocket: WebSocket) -> None:
                     logger.info("Device WS: finish received, committing ASR")
                     await asr_client.finish_task()
                     try:
-                        await asyncio.wait_for(finished_event.wait(), timeout=5)
+                        await asyncio.wait_for(finished_event.wait(), timeout=8)
                     except asyncio.TimeoutError:
-                        logger.warning("Device WS: ASR finish timeout")
+                        logger.warning("Device WS: ASR finish timeout, using latest text")
                     break
 
         if not final_text:
@@ -162,7 +166,7 @@ async def device_websocket(websocket: WebSocket) -> None:
         # 发完最后一帧后等待 ESP32 预充缓冲区（8192B）排空，再发 tts.end
         PREBUFFER_DRAIN_SEC = 8192 / BYTES_PER_SEC + 0.15  # ~320ms
         # DashScope TTS PCM 振幅偏低（约 10-20% 满量程），放大至接近前端归一化效果
-        TTS_GAIN = 3.0
+        TTS_GAIN = 10.0
 
         loop = asyncio.get_running_loop()
         clock_start = loop.time()

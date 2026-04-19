@@ -46,6 +46,7 @@ class DashScopeSpeechClient:
     事件映射：
     - conversation.item.input_audio_transcription.delta     → {type: result, is_final: false}
     - conversation.item.input_audio_transcription.completed → {type: result, is_final: true}
+    - conversation.item.input_audio_transcription.text      → {type: result, is_final: false}（流式中间结果）
     - 结束后                                                 → {type: finished}
     - error                                                  → {type: error}
     """
@@ -57,6 +58,8 @@ class DashScopeSpeechClient:
         self._task_id: str | None = None
         self._receive_task: asyncio.Task[None] | None = None
         self._finishing: bool = False
+        self._last_streaming_text: str = ""  # 追踪最新流式文本，finished 时兜底
+        self._is_final_sent: bool = False    # 是否已发送过 is_final=True 的结果
 
     async def connect(self) -> None:
         """建立 WebSocket 连接，等待 session.created。"""
@@ -102,6 +105,8 @@ class DashScopeSpeechClient:
 
         self._task_id = uuid.uuid4().hex
         self._finishing = False
+        self._is_final_sent = False
+        self._last_streaming_text = ""
 
         # 配置 session：纯文本输出 + server_vad + ASR 转录
         session_update = {
@@ -143,6 +148,7 @@ class DashScopeSpeechClient:
                     # DashScope 流式转录事件，文本在 text 或 stash 字段
                     text = data.get("text") or data.get("stash") or ""
                     if text:
+                        self._last_streaming_text = text
                         on_result({
                             "type": "result",
                             "text": text,
@@ -153,6 +159,7 @@ class DashScopeSpeechClient:
                     transcript = data.get("transcript") or data.get("text") or data.get("stash") or ""
                     logger.info(f"Transcription completed: {transcript!r}")
                     if transcript:
+                        self._is_final_sent = True
                         on_result({
                             "type": "result",
                             "text": transcript,
@@ -178,6 +185,13 @@ class DashScopeSpeechClient:
                     # 结束阶段收到任何错误（缓冲区已被 VAD 清空是常见情况）均视为正常完成
                     if self._finishing:
                         logger.info(f"Error during finishing (expected, VAD may have cleared buffer): {err_msg}")
+                        # 没收到过 is_final 结果时，用最后收到的流式文本作为最终结果
+                        if not self._is_final_sent and self._last_streaming_text:
+                            on_result({
+                                "type": "result",
+                                "text": self._last_streaming_text,
+                                "is_final": True,
+                            })
                         on_result({"type": "finished", "task_id": self._task_id})
                     else:
                         logger.error(f"Realtime error: {err}")
@@ -204,6 +218,14 @@ class DashScopeSpeechClient:
             if self._finishing:
                 # 结束阶段 DashScope 主动关闭连接（超时/正常断开），属于预期行为
                 logger.debug(f"DashScope connection closed during finishing (expected): {e}")
+                # 没收到过 is_final 结果时，用最后收到的流式文本作为最终结果
+                if not self._is_final_sent and self._last_streaming_text:
+                    on_result({
+                        "type": "result",
+                        "text": self._last_streaming_text,
+                        "is_final": True,
+                    })
+                    on_result({"type": "finished", "task_id": self._task_id})
             else:
                 logger.error(f"Receive results error: {e}")
                 on_result({"type": "error", "message": str(e)})

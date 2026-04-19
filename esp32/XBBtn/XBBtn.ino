@@ -51,6 +51,10 @@ int g_currentI2SMode = MODE_SPK;
 bool g_i2sInstalled = false;
 int g_speakerSampleRate = 24000;
 
+// 4Ω 2W 喇叭比 8Ω 更灵敏，输出需要适当衰减防止失真。
+// 范围 0~255，值越小音量越低。建议从 180 开始试。
+static const uint8_t SPEAKER_VOLUME = 60;
+
 // Microphone capture tuning (long-term quality baseline)
 // 1) Gain boosts low-level input from PDM mic.
 // 2) Soft limiter prevents hard clipping after gain.
@@ -153,6 +157,29 @@ void enqueueSpeakerPcmS16(const uint8_t *data, size_t len) {
     if ((len & 1) == 1) {
         g_pcmCarryByte = data[len - 1];
         g_pcmCarryValid = true;
+    }
+}
+
+// Debug: print raw PCM amplitude before volume control
+static unsigned long s_lastRawPrintAtMs = 0;
+void debugPrintRawPcm(const uint8_t *data, size_t len) {
+    if (len < 2) return;
+    size_t samples = len / 2;
+    int16_t maxRaw = 0;
+    int32_t sumRaw = 0;
+    for (size_t i = 0; i < samples; ++i) {
+        int16_t s = (int16_t)((uint16_t)data[i * 2] | ((uint16_t)data[i * 2 + 1] << 8));
+        int16_t absS = s >= 0 ? s : -s;
+        if (absS > maxRaw) maxRaw = absS;
+        sumRaw += absS;
+    }
+    unsigned long now = millis();
+    if (now - s_lastRawPrintAtMs >= 2000) {
+        float dbAtt = 20.0f * log10((float)SPEAKER_VOLUME / 255.0f);
+        Serial.printf("[raw] raw_max=%d raw_avg=%.1f vol=%u out_max~=%d atten=%.1fdB\n",
+                      maxRaw, (float)sumRaw / samples, SPEAKER_VOLUME,
+                      (int)(maxRaw * (float)SPEAKER_VOLUME / 255.0f), dbAtt);
+        s_lastRawPrintAtMs = now;
     }
 }
 
@@ -374,25 +401,47 @@ void writeSpeakerPcm(const uint8_t *data, size_t len) {
         return;
     }
 
-    size_t offset = 0;
-    while (offset < len) {
-        size_t written = 0;
-        esp_err_t err = i2s_write(
-            SPEAK_I2S_NUMBER,
-            data + offset,
-            len - offset,
-            &written,
-            120 / portTICK_PERIOD_MS
-        );
-        if (err != ESP_OK) {
-            Serial.printf("i2s_write error: %d\n", err);
-            setState(STATE_ERROR);
-            return;
-        }
-        if (written == 0) {
-            break;
-        }
-        offset += written;
+    // Apply software volume attenuation for 4Ω speaker to prevent distortion at high gain.
+    // SPEAKER_VOLUME 255 = unity (no change); lower values reduce output level.
+
+    size_t bytesPerSample = 2;
+    size_t samples = len / bytesPerSample;
+    uint8_t outBuf[2048];
+
+    int16_t maxS = 0;
+    int32_t sumS = 0;
+    for (size_t i = 0; i < samples; ++i) {
+        int16_t s = (int16_t)((uint16_t)data[i * 2] | ((uint16_t)data[i * 2 + 1] << 8));
+        s = (int16_t)((int32_t)s * SPEAKER_VOLUME / 255);
+        outBuf[i * 2]     = (uint8_t)(s & 0xFF);
+        outBuf[i * 2 + 1] = (uint8_t)((s >> 8) & 0xFF);
+        int16_t absS = s >= 0 ? s : -s;
+        if (absS > maxS) maxS = absS;
+        sumS += absS;
+    }
+
+    // Print volume stats every 2 seconds to avoid flooding serial
+    static unsigned long lastVolPrintAtMs = 0;
+    unsigned long now = millis();
+    if (now - lastVolPrintAtMs >= 2000) {
+        float avg = (float)sumS / (float)samples;
+        float dbAtten = 20.0f * log10((float)SPEAKER_VOLUME / 255.0f);
+        Serial.printf("[out] vol=%u max_out=%d avg_out=%.1f atten=%.1fdB\n",
+                      SPEAKER_VOLUME, maxS, avg, dbAtten);
+        lastVolPrintAtMs = now;
+    }
+
+    size_t written = 0;
+    esp_err_t err = i2s_write(
+        SPEAK_I2S_NUMBER,
+        outBuf,
+        len,
+        &written,
+        120 / portTICK_PERIOD_MS
+    );
+    if (err != ESP_OK) {
+        Serial.printf("i2s_write error: %d\n", err);
+        setState(STATE_ERROR);
     }
 }
 
@@ -668,6 +717,7 @@ void onWebsocketMessage(websockets::WebsocketsMessage message) {
                 return;
             }
             setState(STATE_PLAYBACK);
+            debugPrintRawPcm((const uint8_t *)raw.data(), raw.length());
             enqueueSpeakerPcmS16((const uint8_t *)raw.data(), raw.length());
         }
     }
