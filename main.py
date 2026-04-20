@@ -4,6 +4,7 @@ from fastapi.responses import FileResponse
 
 from app.api.endpoints.chat import router as chat_router
 from app.api.endpoints.device import router as device_router
+from app.api.endpoints.device import device_websocket
 from app.api.endpoints.speech import router as speech_router
 from app.api.endpoints.speech import speech_recognition_websocket
 from app.api.endpoints.tts import router as tts_router
@@ -19,6 +20,12 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 @app.websocket("/ws")
 async def ws_shortcut(websocket: WebSocket) -> None:
     await speech_recognition_websocket(websocket)
+
+
+# 兼容反向代理是否剥离 /xibao 前缀的两种部署方式。
+@app.websocket("/xibao/api/device/ws")
+async def xibao_device_ws_alias(websocket: WebSocket) -> None:
+    await device_websocket(websocket)
 
 
 @app.get("/")

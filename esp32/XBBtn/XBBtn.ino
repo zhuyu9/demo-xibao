@@ -1,18 +1,59 @@
 #include <WiFi.h>
 #include <driver/i2s.h>
+#include <time.h>
 
 #include "M5Atom.h"
 #include <ArduinoWebsockets.h>
 #include <ArduinoJson.h>
+#include <string.h>
 #include <string>
 
 const char *WifiSSID = "Z-HOME";
 const char *WifiPWD  = "perfect56";
 
-// demo-xibao 后端配置（局域网 IP + 端口）
-#define BFF_SERVER_HOST "192.168.3.214"
-#define BFF_SERVER_PORT 8000
-#define DEVICE_WS_PATH  "/api/device/ws"
+// demo-xibao 后端配置。使用完整 URL 以兼容 ws/wss、默认端口、SNI 和反代路径前缀。
+// #define DEVICE_WS_URL "wss://bizbiji.com/xibao/api/device/ws"
+// 本地调试可切回：
+#define DEVICE_WS_URL "ws://192.168.3.214:8000/api/device/ws"
+
+// WSS 优先使用 CA 校验；现场网络/NTP/证书链异常时回退到 setInsecure，保证连接可用。
+#define DEVICE_WS_TLS_USE_CA 1
+#define DEVICE_WS_TLS_FALLBACK_INSECURE 1
+
+// bizbiji.com 当前使用 Let's Encrypt 证书链，根证书为 ISRG Root X1。
+static const char DEVICE_WS_CA_CERT[] PROGMEM = R"EOF(
+-----BEGIN CERTIFICATE-----
+MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw
+TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh
+cmNoIEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDEwHhcNMTUwNjA0MTEwNDM4
+WhcNMzUwNjA0MTEwNDM4WjBPMQswCQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJu
+ZXQgU2VjdXJpdHkgUmVzZWFyY2ggR3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBY
+MTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAK3oJHP0FDfzm54rVygc
+h77ct984kIxuPOZXoHj3dcKi/vVqbvYATyjb3miGbESTtrFj/RQSa78f0uoxmyF+
+0TM8ukj13Xnfs7j/EvEhmkvBioZxaUpmZmyPfjxwv60pIgbz5MDmgK7iS4+3mX6U
+A5/TR5d8mUgjU+g4rk8Kb4Mu0UlXjIB0ttov0DiNewNwIRt18jA8+o+u3dpjq+sW
+T8KOEUt+zwvo/7V3LvSye0rgTBIlDHCNAymg4VMk7BPZ7hm/ELNKjD+Jo2FR3qyH
+B5T0Y3HsLuJvW5iB4YlcNHlsdu87kGJ55tukmi8mxdAQ4Q7e2RCOFvu396j3x+UC
+B5iPNgiV5+I3lg02dZ77DnKxHZu8A/lJBdiB3QW0KtZB6awBdpUKD9jf1b0SHzUv
+KBds0pjBqAlkd25HN7rOrFleaJ1/ctaJxQZBKT5ZPt0m9STJEadao0xAH0ahmbWn
+OlFuhjuefXKnEgV4We0+UXgVCwOPjdAvBbI+e0ocS3MFEvzG6uBQE3xDk3SzynTn
+jh8BCNAw1FtxNrQHusEwMFxIt4I7mKZ9YIqioymCzLq9gwQbooMDQaHWBfEbwrbw
+qHyGO0aoSCqI3Haadr8faqU9GY/rOPNk3sgrDQoo//fb4hVC1CLQJ13hef4Y53CI
+rU7m2Ys6xt0nUW7/vGT1M0NPAgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNV
+HRMBAf8EBTADAQH/MB0GA1UdDgQWBBR5tFnme7bl5AFzgAiIyBpY9umbbjANBgkq
+hkiG9w0BAQsFAAOCAgEAVR9YqbyyqFDQDLHYGmkgJykIrGF1XIpu+ILlaS/V9lZL
+ubhzEFnTIZd+50xx+7LSYK05qAvqFyFWhfFQDlnrzuBZ6brJFe+GnY+EgPbk6ZGQ
+3BebYhtF8GaV0nxvwuo77x/Py9auJ/GpsMiu/X1+mvoiBOv/2X/qkSsisRcOj/KK
+NFtY2PwByVS5uCbMiogziUwthDyC3+6WVwW6LLv3xLfHTjuCvjHIInNzktHCgKQ5
+ORAzI4JMPJ+GslWYHb4phowim57iaztXOoJwTdwJx4nLCgdNbOhdjsnvzqvHu7Ur
+TkXWStAmzOVyyghqpZXjFaH3pO3JLF+l+/+sKAIuvtd7u+Nxe5AW0wdeRlN8NwdC
+jNPElpzVmbUq4JUagEiuTDkHzsxHpFKVK7q4+63SM1N95R1NbdWhscdCb+ZAJzVc
+oyi3B43njTOQ5yOf+1CceWxG1bQVs5ZufpsMljq4Ui0/1lvh+wjChP4kqKOJ2qxq
+4RgqsahDYVvTH9w7jXbyLeiNdd8XM2w9U/t7y0Ff/9yi0GE44Za4rF2LN9d11TPA
+mRGunUHBcnWEvgJBQl9nJEiU0Zsnvgc/ubhPgXRR4Xq37Z0j4r7g1SgEEzwxA57d
+emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=
+-----END CERTIFICATE-----
+)EOF";
 
 #define CONFIG_I2S_BCK_PIN     19
 #define CONFIG_I2S_LRCK_PIN    33
@@ -44,6 +85,9 @@ unsigned long g_lastWsActivityAtMs = 0;
 unsigned long g_lastWsConnectAttemptAtMs = 0;
 static const unsigned long WS_IDLE_DISCONNECT_MS = 15000;
 static const unsigned long WS_RECONNECT_BACKOFF_MS = 1500;
+// Keep the WSS connection warm while READY so pressing the button can enter
+// recording immediately instead of waiting for DNS/TCP/TLS/WebSocket handshake.
+static const bool WS_KEEP_READY_CONNECTION = true;
 
 #define I2S_READ_CHUNK_SIZE 1024
 static uint8_t i2s_read_buffer[I2S_READ_CHUNK_SIZE];
@@ -281,6 +325,38 @@ bool ensureI2SMode(int mode) {
     return InitI2SSpeakOrMic(mode);
 }
 
+bool isSecureDeviceWebSocketUrl() {
+    return strncmp(DEVICE_WS_URL, "wss://", 6) == 0;
+}
+
+void syncTlsClockIfNeeded() {
+    if (!isSecureDeviceWebSocketUrl()) {
+        return;
+    }
+
+    configTime(0, 0, "ntp.aliyun.com", "ntp1.aliyun.com", "pool.ntp.org");
+    Serial.print("[tls] sync clock");
+
+    for (int i = 0; i < 25; ++i) {
+        time_t now = time(nullptr);
+        struct tm timeinfo;
+        if (now > 1704067200 && gmtime_r(&now, &timeinfo) != nullptr) {
+            Serial.printf(" ok %04d-%02d-%02dT%02d:%02d:%02dZ\n",
+                          timeinfo.tm_year + 1900,
+                          timeinfo.tm_mon + 1,
+                          timeinfo.tm_mday,
+                          timeinfo.tm_hour,
+                          timeinfo.tm_min,
+                          timeinfo.tm_sec);
+            return;
+        }
+        Serial.print(".");
+        delay(200);
+    }
+
+    Serial.println(" timeout, will rely on TLS fallback if needed");
+}
+
 bool connectWifi() {
     WiFi.mode(WIFI_STA);
     WiFi.setSleep(false);
@@ -303,6 +379,7 @@ bool connectWifi() {
     Serial.println("\nWiFi connected");
     Serial.print("IP: ");
     Serial.println(WiFi.localIP());
+    syncTlsClockIfNeeded();
     return true;
 }
 
@@ -322,6 +399,9 @@ void markWsActivity() {
 }
 
 bool isWsConnectionRequired(bool buttonPressed) {
+    if (WS_KEEP_READY_CONNECTION && g_state == STATE_READY) {
+        return true;
+    }
     if (buttonPressed && g_state == STATE_READY) {
         return true;
     }
@@ -349,9 +429,31 @@ bool connectDeviceWebSocket() {
     ws_client.onMessage(onWebsocketMessage);
     ws_client.onEvent(onWebsocketEvent);
 
-    Serial.printf("Connect ws://%s:%d%s\n", BFF_SERVER_HOST, BFF_SERVER_PORT, DEVICE_WS_PATH);
+    Serial.printf("Connect %s\n", DEVICE_WS_URL);
 
-    bool ok = ws_client.connect(BFF_SERVER_HOST, BFF_SERVER_PORT, DEVICE_WS_PATH);
+    bool ok = false;
+    if (isSecureDeviceWebSocketUrl()) {
+#if DEVICE_WS_TLS_USE_CA
+        Serial.println("[tls] using CA certificate validation");
+        ws_client.setCACert(DEVICE_WS_CA_CERT);
+        ok = ws_client.connect(DEVICE_WS_URL);
+#if DEVICE_WS_TLS_FALLBACK_INSECURE
+        if (!ok) {
+            ws_client.close();
+            delay(100);
+            Serial.println("[tls] CA validation/connect failed, retrying with setInsecure()");
+            ws_client.setInsecure();
+            ok = ws_client.connect(DEVICE_WS_URL);
+        }
+#endif
+#else
+        Serial.println("[tls] using setInsecure()");
+        ws_client.setInsecure();
+        ok = ws_client.connect(DEVICE_WS_URL);
+#endif
+    } else {
+        ok = ws_client.connect(DEVICE_WS_URL);
+    }
     if (!ok) {
         isWebSocketConnected = false;
         Serial.println("[ws] connect failed");
@@ -644,6 +746,10 @@ void setup() {
         return;
     }
 
+    if (WS_KEEP_READY_CONNECTION) {
+        connectDeviceWebSocket();
+    }
+
     setState(STATE_READY);
 }
 
@@ -781,7 +887,7 @@ void loop() {
                 setState(STATE_ERROR);
             }
         }
-    } else if (ws_client.available() && (now - g_lastWsActivityAtMs >= WS_IDLE_DISCONNECT_MS)) {
+    } else if (!WS_KEEP_READY_CONNECTION && ws_client.available() && (now - g_lastWsActivityAtMs >= WS_IDLE_DISCONNECT_MS)) {
         closeDeviceWebSocketIfOpen("idle timeout");
     }
 

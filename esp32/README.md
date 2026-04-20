@@ -35,12 +35,21 @@ Board：`M5Stack-ATOM`（需先安装 M5Stack Arduino 板包）
 const char *WifiSSID = "your-ssid";
 const char *WifiPWD  = "your-password";
 
-// demo-xibao 后端（局域网 IP，需与 ESP32 在同一网段）
-#define BFF_SERVER_HOST "192.168.x.x"
-#define BFF_SERVER_PORT 8000
+// demo-xibao 后端
+#define DEVICE_WS_URL "wss://bizbiji.com/xibao/api/device/ws"
 ```
 
-后端启动命令：
+本地调试可临时切回局域网明文 WebSocket：
+
+```cpp
+#define DEVICE_WS_URL "ws://192.168.x.x:8000/api/device/ws"
+```
+
+`wss://` 模式下固件会先用 Let's Encrypt ISRG Root X1 做证书校验，并在 WiFi 连接后通过 NTP 同步时间；如果现场网络导致 NTP 或证书校验失败，会自动回退到 `setInsecure()` 再连接，保证 WSS 加密通道仍可用。
+
+固件默认开启 `WS_KEEP_READY_CONNECTION`：READY 绿灯状态会预连接并保持 WebSocket，避免按下按钮后再等待 WSS 握手。若要节省后端 ASR 长连接资源，可改为 `false`，但第一次按下会重新出现约 1-2 秒连接等待。
+
+本地后端启动命令：
 
 ```bash
 uvicorn main:app --reload --port 8000 --host 0.0.0.0
